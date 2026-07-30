@@ -17,6 +17,13 @@ namespace MyTaskTray
         private const string ToolTipText = "MyTaskTray";
         private const int MenuTextMaxLength = 40;
 
+        // NotifyIcon が右クリック時に使っている内部処理。左クリックでも同じ見せ方をするために借りる。
+        // 非公開メンバーなので将来の .NET で無くなる可能性があるが、
+        // 取得は 1 度だけ試し、見つからなければ ShowTrayMenu() が手動表示に切り替える。
+        private static readonly MethodInfo? ShowContextMenuMethod = typeof(NotifyIcon).GetMethod(
+            "ShowContextMenu",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
         private readonly NotifyIcon _notifyIcon;
         private AppSettings _settings;
         private SettingsWindow? _settingsWindow;
@@ -89,10 +96,7 @@ namespace MyTaskTray
 
             try
             {
-                MethodInfo? showContextMenu = typeof(NotifyIcon).GetMethod(
-                    "ShowContextMenu",
-                    BindingFlags.Instance | BindingFlags.NonPublic);
-
+                MethodInfo? showContextMenu = ShowContextMenuMethod;
                 if (showContextMenu is not null)
                 {
                     showContextMenu.Invoke(_notifyIcon, null);
@@ -233,15 +237,19 @@ namespace MyTaskTray
                     ? new ToolStripSeparator()
                     : CreateClipMenuItem(item);
 
-                if (string.IsNullOrWhiteSpace(item.Category))
+                // 「日付」と「日付 」（末尾に空白）が別のサブメニューになってしまわないよう、
+                // 見た目で区別できない前後の空白は無視して同じカテゴリとして扱う
+                string category = item.Category.Trim();
+
+                if (string.IsNullOrEmpty(category))
                 {
                     target.Add(entry);
                     continue;
                 }
 
-                if (!categories.TryGetValue(item.Category, out ToolStripMenuItem? parent))
+                if (!categories.TryGetValue(category, out ToolStripMenuItem? parent))
                 {
-                    parent = new ToolStripMenuItem(EscapeAmpersand(item.Category));
+                    parent = new ToolStripMenuItem(EscapeAmpersand(category));
 
                     // ShowImageMargin は ToolStripDropDownMenu 側のプロパティ
                     if (parent.DropDown is ToolStripDropDownMenu dropDownMenu)
@@ -249,7 +257,7 @@ namespace MyTaskTray
                         dropDownMenu.ShowImageMargin = false;
                     }
 
-                    categories[item.Category] = parent;
+                    categories[category] = parent;
                     target.Add(parent);
                 }
 

@@ -17,7 +17,9 @@
 | 8 | 空文字列でも「コピーしました」と通知される | **修正済み** |
 | 9 | サロゲートペアの途中で文字列が切られる | **修正済み** |
 | 10 | 終了時に未保存確認ダイアログのキャンセルが効かない | **修正済み** |
-| 11〜20 | 下記参照 | 未対応 |
+| 11 | 仮想化と組み合わせたときにドロップ線が残る | **修正済み** |
+| 12 | 連番の入力欄が実用上不便（負の増分・貼り付け・空欄） | **修正済み** |
+| 13〜20 | 下記の一覧を参照 | **修正済み**（19 は緩和のみ） |
 
 ---
 
@@ -210,17 +212,17 @@ README には「文字列の差し込みは数値として読めないため…�
 
 ---
 
-## 優先度: 中（未対応）
-
 ### 11. 仮想化と組み合わせたときにドロップ線が残る
 
 `ClearDropIndicators()` は `ItemContainerGenerator.ContainerFromItem()` を使うため、
 スクロールで仮想化された行の添付プロパティはクリアできない。
 コンテナが再利用されると、無関係な行に挿入線が残ることがある。
 
-対応案: `DropIndicator` を設定した `ListBoxItem` を1つだけフィールドで保持し、そこだけ戻す。
+**対応**: 挿入線を出している `ListBoxItem` を `_dropIndicatorTarget` に 1 つだけ保持し、
+`SetDropIndicator()` / `ClearDropIndicators()` でそこだけ操作するようにした。
+一覧全体の走査がなくなったため、`DragOver` ごとに全行をクリアしていた無駄も解消される。
 
-参照: `SettingsWindow.xaml.cs:320-329`
+参照: `SettingsWindow.xaml.cs` の `SetDropIndicator()` / `ClearDropIndicators()` / `OnListDragOver()`
 
 ---
 
@@ -232,22 +234,43 @@ README には「文字列の差し込みは数値として読めないため…�
   バインディングが無言で失敗し、値が更新されないまま古い値が残る。
 - 空欄にした場合も同様に、無言で古い値が残る。
 
-参照: `SettingsWindow.xaml.cs:438-448` / `SettingsWindow.xaml:213-218`
+**対応**: `OnDigitsOnly` を廃止し、3 つのハンドラに置き換えた。
+
+- `OnIntegerTextInput`: 入力後の文字列全体を `int.TryParse` で検証する。
+  先頭の `-` を許可したので**増分に負の値（カウントダウン）を入れられる**ようになった。
+  `int` に収まらない桁数も入力段階で弾くため、変換失敗で古い値が残ることがない。
+- `OnIntegerPasting`: `DataObject.Pasting` で貼り付け後の文字列も同じ条件で検証し、
+  整数にならない場合は `CancelCommand()` で取り消す。
+- `OnIntegerLostFocus`: 空欄や `-` だけの状態で欄を離れたら、
+  `BindingExpression.UpdateTarget()` でバインディング元の値に戻す。
+  削除キーは `PreviewTextInput` を通らないため、この安全網が必要。
+
+参照: `SettingsWindow.xaml.cs` の `OnIntegerTextInput()` / `OnIntegerPasting()` /
+`OnIntegerLostFocus()` / `IsValidIntegerEdit()`、`SettingsWindow.xaml` の連番入力欄
 
 ---
 
-## 優先度: 低 / 仕様確認
+## 優先度: 低 / 仕様確認（修正済み）
 
-| # | 内容 | 参照 |
+| # | 内容 | 対応 |
 |---|---|---|
-| 13 | `Items` に `Reset`（`Clear()`）が来ると `PropertyChanged` の購読が外れない。現状 `Clear()` を呼ぶ箇所はないため潜在的 | `ViewModels/SettingsViewModel.cs:268-294` |
-| 14 | 絞り込み中に項目名を編集しても `StatusText` の件数が更新されない | `ViewModels/SettingsViewModel.cs:296-314` |
-| 15 | `-2^2` が `4` になる（単項マイナスがべき乗より強い）。Excel と同じだが数学の慣習とは逆。README に明記推奨 | `Services/ExpressionEvaluator.cs:137-170` |
-| 16 | decimal のオーバーフローは `OverflowException` で、`ExpressionException` に包まれていない。上位で捕まるので実害はないがエラー種別が不統一 | `Services/ExpressionEvaluator.cs:418-454` |
-| 17 | カテゴリ名の比較が `StringComparer.Ordinal`。`日付` と `日付 `（末尾空白）が別サブメニューになる | `TrayIconManager.cs:186` |
-| 18 | トーストは `SystemParameters.WorkArea`（プライマリのみ）を使うため、常にプライマリモニタ右下に出る | `ToastWindow.xaml.cs:51-56` |
-| 19 | 左クリックのメニュー表示が `NotifyIcon` の private メソッドをリフレクションで呼んでいる。.NET のバージョンアップやトリミング公開で壊れる（フォールバックはあり） | `TrayIconManager.cs:75-111` |
-| 20 | `Alt+↑/↓` と `Ctrl+N/D/F` が Window の `PreviewKeyDown` で常に処理されるため、テキスト入力中にも発火する | `SettingsWindow.xaml.cs:586-624` |
+| 13 | `Items` に `Reset`（`Clear()`）が来ると `PropertyChanged` の購読が外れない | 差分（`OldItems`/`NewItems`）ではなく `ResubscribeItems()` で毎回張り直す方式に変更。全アクションで正しく、項目数は数十なのでコストも問題ない |
+| 14 | 絞り込み中に項目名を編集しても `StatusText` の件数が更新されない | `Name` / `Text` / `Category` / `IsSeparator` の変更時に `StatusText` の再評価を通知 |
+| 15 | `-2^2` が `4` になる（単項マイナスがべき乗より強い） | 仕様として `ExpressionEvaluator` の説明と README に明記。`-(2^2)` はかっこで書く旨も併記 |
+| 16 | decimal のオーバーフローが `ExpressionException` に包まれていない | `Evaluate()` で `OverflowException` / `DivideByZeroException` を捕まえて `ExpressionException` に包み直し、「`Evaluate` は `ExpressionException` だけを投げる」という契約にした |
+| 17 | `日付` と `日付 `（末尾空白）が別サブメニューになる | メニュー構築・カテゴリ候補・保存時の 3 箇所でカテゴリをトリム。大文字小文字の違いは一覧上で見分けられるため、あえて区別したままにしている（見えない空白だけを吸収する方針） |
+| 18 | トーストが常にプライマリモニタ右下に出る | `Screen.FromPoint(Cursor.Position)` でカーソルがあるディスプレイの作業領域を取得し、`TransformFromDevice` で WPF 座標に変換。取得できない場合は従来の `SystemParameters.WorkArea` にフォールバック |
+| 19 | 左クリックのメニュー表示が private メソッドのリフレクション | `MethodInfo` を static フィールドで 1 度だけ解決するようにした。**リフレクション自体は残している**（下記参照） |
+| 20 | `Alt+↑/↓` がテキスト入力中にも発火する | 入力欄（`TextBox`）にフォーカスがあるときは無効化。一覧から目を離している間に気付かず並びが変わるのを防ぐ。`Ctrl+N/D/F/S` は意図的な操作でデータの損失もないため、従来どおり全体で有効 |
+
+### 19 についての補足
+
+リフレクションを完全に外すには `menu.Show(Cursor.Position)` + `SetForegroundWindow()`
+（現在のフォールバック）に一本化することになるが、`NotifyIcon` の内部処理は
+タスクバーの位置に応じたメニューの反転表示も行っており、フォールバックでは
+画面端での表示位置が変わる可能性がある。Windows 上で検証できていないため、
+**動作を変えないことを優先して残した**。フォールバックがあるので、
+将来 .NET 側でメンバーが無くなっても機能は失われない。
 
 ---
 

@@ -210,11 +210,18 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="次の番号" VerticalAlignment="Center"
                                                Foreground="{DynamicResource Brush.Seq.Text}" />
-                                    <TextBox Width="80" Margin="8,0,18,0" PreviewTextInput="OnDigitsOnly"
+                                    <TextBox Width="80" Margin="8,0,18,0"
+                                             PreviewTextInput="OnIntegerTextInput"
+                                             DataObject.Pasting="OnIntegerPasting"
+                                             LostFocus="OnIntegerLostFocus"
                                              Text="{Binding SelectedItem.SequenceValue, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBlock Text="増分" VerticalAlignment="Center"
                                                Foreground="{DynamicResource Brush.Seq.Text}" />
-                                    <TextBox Width="64" Margin="8,0,18,0" PreviewTextInput="OnDigitsOnly"
+                                    <TextBox Width="64" Margin="8,0,18,0"
+                                             ToolTip="負の値を入れるとカウントダウンになります"
+                                             PreviewTextInput="OnIntegerTextInput"
+                                             DataObject.Pasting="OnIntegerPasting"
+                                             LostFocus="OnIntegerLostFocus"
                                              Text="{Binding SelectedItem.SequenceStep, UpdateSourceTrigger=PropertyChanged}" />
                                     <Button Content="1 に戻す" Padding="10,3" MinHeight="26" Click="OnResetSequence" />
                                 </StackPanel>

@@ -13,6 +13,8 @@ namespace MyTaskTray.Services
     /// 対応する記法:
     ///   数値       1  1.5  1_000_000（_ は桁区切りとして無視。カンマは引数の区切り）
     ///   演算子     + - * / ^（べき乗） 単項の -
+    ///              単項の - はべき乗より強く結び付くため、-2^2 は 4 になる（Excel と同じ）。
+    ///              -(2^2) を意図する場合はかっこで書く。
     ///   後置 %     8% → 0.08（1000*8% で消費税額）
     ///   かっこ     ( )
     ///   定数       pi  e
@@ -33,7 +35,10 @@ namespace MyTaskTray.Services
         /// </summary>
         private const string DefaultFormat = "0.##########";
 
-        /// <summary>式を評価する。解釈できない場合は <see cref="ExpressionException"/>。</summary>
+        /// <summary>
+        /// 式を評価する。解釈できない場合・計算できない場合は必ず
+        /// <see cref="ExpressionException"/> を投げる。
+        /// </summary>
         public static decimal Evaluate(string expression)
         {
             if (string.IsNullOrWhiteSpace(expression))
@@ -41,10 +46,22 @@ namespace MyTaskTray.Services
                 throw new ExpressionException("式が空です。");
             }
 
-            Parser parser = new(expression);
-            decimal value = parser.ParseExpression();
-            parser.ExpectEnd();
-            return value;
+            try
+            {
+                Parser parser = new(expression);
+                decimal value = parser.ParseExpression();
+                parser.ExpectEnd();
+                return value;
+            }
+            catch (OverflowException)
+            {
+                // decimal の範囲を超えた場合。呼び出し側が例外の種類を気にしなくて済むよう包み直す
+                throw new ExpressionException("計算結果が大きすぎます。");
+            }
+            catch (DivideByZeroException)
+            {
+                throw new ExpressionException("0 で割ることはできません。");
+            }
         }
 
         /// <summary>

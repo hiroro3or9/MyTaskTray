@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -26,6 +27,10 @@ namespace MyTaskTray
         private Point _dragStartPoint;
         private bool _dragArmed;
         private ClipItem? _draggingItem;
+
+        // 挿入線を出している行。仮想化でコンテナが消えたり再利用されたりするため、
+        // 一覧全体を走査するのではなく「いま線を出している 1 行」だけを覚えておく。
+        private ListBoxItem? _dropIndicatorTarget;
 
         public SettingsWindow(AppSettings settings)
         {
@@ -252,10 +257,9 @@ namespace MyTaskTray
 
         private void OnListDragOver(object sender, DragEventArgs e)
         {
-            ClearDropIndicators();
-
             if (_draggingItem is null)
             {
+                ClearDropIndicators();
                 e.Effects = DragDropEffects.None;
                 e.Handled = true;
                 return;
@@ -265,7 +269,11 @@ namespace MyTaskTray
                 && !ReferenceEquals(container.DataContext, _draggingItem))
             {
                 bool below = e.GetPosition(container).Y > container.ActualHeight / 2;
-                DropIndicator.SetPosition(container, below ? DropPosition.Below : DropPosition.Above);
+                SetDropIndicator(container, below ? DropPosition.Below : DropPosition.Above);
+            }
+            else
+            {
+                ClearDropIndicators();
             }
 
             e.Effects = DragDropEffects.Move;
@@ -317,15 +325,27 @@ namespace MyTaskTray
             e.Handled = true;
         }
 
+        /// <summary>挿入線を出す行を切り替える。</summary>
+        private void SetDropIndicator(ListBoxItem container, DropPosition position)
+        {
+            if (!ReferenceEquals(_dropIndicatorTarget, container))
+            {
+                ClearDropIndicators();
+            }
+
+            DropIndicator.SetPosition(container, position);
+            _dropIndicatorTarget = container;
+        }
+
         private void ClearDropIndicators()
         {
-            foreach (object item in ItemsList.Items)
+            if (_dropIndicatorTarget is null)
             {
-                if (ItemsList.ItemContainerGenerator.ContainerFromItem(item) is ListBoxItem container)
-                {
-                    DropIndicator.SetPosition(container, DropPosition.None);
-                }
+                return;
             }
+
+            DropIndicator.SetPosition(_dropIndicatorTarget, DropPosition.None);
+            _dropIndicatorTarget = null;
         }
 
         /// <summary>クリックされた要素から親をたどって行（ListBoxItem）を探す。</summary>
@@ -432,16 +452,57 @@ namespace MyTaskTray
         // 連番・プレビュー
         // ==================================================================
 
-        private void OnDigitsOnly(object sender, TextCompositionEventArgs e)
+        /// <summary>
+        /// 整数の入力欄。数字と先頭のマイナス記号だけを受け付ける
+        /// （増分に負の値を入れるとカウントダウンになる）。
+        /// int に収まらない桁数も弾くため、値が更新されないまま古い値が残ることがない。
+        /// </summary>
+        private void OnIntegerTextInput(object sender, TextCompositionEventArgs e)
         {
-            foreach (char c in e.Text)
+            e.Handled = sender is not TextBox box || !IsValidIntegerEdit(box, e.Text);
+        }
+
+        /// <summary>整数として読めない文字列の貼り付けを取り消す。</summary>
+        private void OnIntegerPasting(object sender, DataObjectPastingEventArgs e)
+        {
+            if (sender is not TextBox box || !e.SourceDataObject.GetDataPresent(DataFormats.UnicodeText))
             {
-                if (!char.IsDigit(c))
-                {
-                    e.Handled = true;
-                    return;
-                }
+                e.CancelCommand();
+                return;
             }
+
+            string text = e.SourceDataObject.GetData(DataFormats.UnicodeText) as string ?? string.Empty;
+            if (!IsValidIntegerEdit(box, text.Trim()))
+            {
+                e.CancelCommand();
+            }
+        }
+
+        /// <summary>
+        /// 空欄や "-" だけの状態で入力欄を離れた場合は、バインディング元の値に戻す。
+        /// そのままにすると、表示と実際の値が食い違ったままになる。
+        /// </summary>
+        private void OnIntegerLostFocus(object sender, RoutedEventArgs e)
+        {
+            if (sender is not TextBox box
+                || int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.CurrentCulture, out _))
+            {
+                return;
+            }
+
+            BindingOperations.GetBindingExpression(box, TextBox.TextProperty)?.UpdateTarget();
+        }
+
+        /// <summary>入力・貼り付けを反映したあとの文字列が、整数として成り立つかどうか。</summary>
+        private static bool IsValidIntegerEdit(TextBox box, string input)
+        {
+            string next = box.Text
+                .Remove(box.SelectionStart, box.SelectionLength)
+                .Insert(box.SelectionStart, input);
+
+            // 入力途中の "-" だけは、続けて数字を打てるように許す
+            return next == "-"
+                || int.TryParse(next, NumberStyles.Integer, CultureInfo.InvariantCulture, out _);
         }
 
         private void OnResetSequence(object sender, RoutedEventArgs e)
@@ -523,6 +584,9 @@ namespace MyTaskTray
                 {
                     item.Name = item.Text.Trim();
                 }
+
+                // 見た目で区別できない前後の空白でカテゴリが分かれないようにする
+                item.Category = item.Category.Trim();
 
                 if (item.SequenceStep == 0)
                 {
@@ -624,9 +688,15 @@ namespace MyTaskTray
 
         private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
         {
-            // Alt + ↑ / ↓ で並べ替え
+            // Alt + ↑ / ↓ で並べ替え。
+            // 文字入力中は一覧から目が離れており、気付かないまま並びが変わってしまうため無効にする。
             if (e.Key == Key.System && (e.SystemKey == Key.Up || e.SystemKey == Key.Down))
             {
+                if (Keyboard.FocusedElement is TextBox)
+                {
+                    return;
+                }
+
                 Move(e.SystemKey == Key.Up ? -1 : 1);
                 e.Handled = true;
                 return;

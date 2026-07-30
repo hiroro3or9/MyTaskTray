@@ -20,6 +20,10 @@ namespace MyTaskTray.ViewModels
         // 編集していない項目はトレイ側の値を優先して取り込む（保存時に巻き戻してしまわないため）。
         private readonly HashSet<string> _sequenceEditedIds = new(StringComparer.Ordinal);
 
+        // PropertyChanged を購読している項目。CollectionChanged の Reset（Clear など）では
+        // OldItems が渡されず購読を外せないため、購読中の一覧を自分で持つ。
+        private readonly List<ClipItem> _subscribedItems = [];
+
         private ClipItem? _selectedItem;
         private string _filterText = string.Empty;
         private bool _showCopyNotification;
@@ -43,10 +47,7 @@ namespace MyTaskTray.ViewModels
 
             // 変更を検知して「未保存」の状態を持つ
             Items.CollectionChanged += OnItemsCollectionChanged;
-            foreach (ClipItem item in Items)
-            {
-                item.PropertyChanged += OnAnyItemPropertyChanged;
-            }
+            ResubscribeItems();
 
             SelectedItem = Items.FirstOrDefault();
         }
@@ -222,9 +223,10 @@ namespace MyTaskTray.ViewModels
         /// <summary>既存項目のカテゴリを重複なく集めて候補を作り直す。</summary>
         public void RefreshCategories()
         {
+            // 前後の空白の有無で候補が分かれないよう、トリムしてから重複を除く
             List<string> categories = [.. Items
-                .Select(i => i.Category)
-                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(i => i.Category.Trim())
+                .Where(c => !string.IsNullOrEmpty(c))
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(c => c, StringComparer.CurrentCulture)];
 
@@ -271,30 +273,29 @@ namespace MyTaskTray.ViewModels
 
         private void OnItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
-            if (e.OldItems is not null)
-            {
-                foreach (object old in e.OldItems)
-                {
-                    if (old is ClipItem item)
-                    {
-                        item.PropertyChanged -= OnAnyItemPropertyChanged;
-                    }
-                }
-            }
-
-            if (e.NewItems is not null)
-            {
-                foreach (object added in e.NewItems)
-                {
-                    if (added is ClipItem item)
-                    {
-                        item.PropertyChanged += OnAnyItemPropertyChanged;
-                    }
-                }
-            }
+            // Reset（Clear など）では OldItems / NewItems が渡されないため、
+            // 差分ではなく購読し直す。項目数はたかだか数十なのでコストは問題にならない。
+            ResubscribeItems();
 
             IsDirty = true;
             OnPropertyChanged(nameof(StatusText));
+        }
+
+        /// <summary>現在の項目に PropertyChanged を張り直す。</summary>
+        private void ResubscribeItems()
+        {
+            foreach (ClipItem item in _subscribedItems)
+            {
+                item.PropertyChanged -= OnAnyItemPropertyChanged;
+            }
+
+            _subscribedItems.Clear();
+
+            foreach (ClipItem item in Items)
+            {
+                item.PropertyChanged += OnAnyItemPropertyChanged;
+                _subscribedItems.Add(item);
+            }
         }
 
         private void OnAnyItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -305,6 +306,12 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.Text):
                 case nameof(ClipItem.Category):
                 case nameof(ClipItem.IsSeparator):
+                    IsDirty = true;
+
+                    // 絞り込み中は表示件数が変わるため、件数の表示も作り直す
+                    OnPropertyChanged(nameof(StatusText));
+                    break;
+
                 case nameof(ClipItem.SequenceStep):
                     IsDirty = true;
                     break;

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
@@ -50,9 +51,38 @@ namespace MyTaskTray
 
         private void Reposition()
         {
-            Rect area = SystemParameters.WorkArea;
+            Rect area = GetWorkArea();
             Left = area.Right - ActualWidth;
             Top = area.Bottom - ActualHeight;
+        }
+
+        /// <summary>
+        /// マウスカーソルがあるディスプレイの作業領域（タスクバーを除いた範囲）を
+        /// WPF の座標（デバイス非依存単位）で返す。
+        /// <see cref="SystemParameters.WorkArea"/> はプライマリディスプレイ固定のため、
+        /// マルチディスプレイだと操作中の画面とは別の画面に通知が出てしまう。
+        /// </summary>
+        private Rect GetWorkArea()
+        {
+            try
+            {
+                System.Drawing.Rectangle work = System.Windows.Forms.Screen
+                    .FromPoint(System.Windows.Forms.Cursor.Position)
+                    .WorkingArea;
+
+                // Screen の座標は実ピクセル。WPF の座標に変換する
+                Matrix fromDevice = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice
+                    ?? Matrix.Identity;
+
+                return new Rect(
+                    fromDevice.Transform(new Point(work.Left, work.Top)),
+                    fromDevice.Transform(new Point(work.Right, work.Bottom)));
+            }
+            catch (Exception)
+            {
+                // 取得できない場合はプライマリディスプレイに出す
+                return SystemParameters.WorkArea;
+            }
         }
 
         private void OnClicked(object sender, MouseButtonEventArgs e) => FadeOutAndClose();
