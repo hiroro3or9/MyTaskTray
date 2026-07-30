@@ -55,9 +55,12 @@ namespace MyTaskTray.Services
                 window.SourceInitialized += (_, _) => ApplyTitleBar(window);
             }
 
-            EventHandler handler = (_, _) => ApplyTitleBar(window);
-            ThemeChanged += handler;
-            window.Closed += (_, _) => ThemeChanged -= handler;
+            // ウィンドウが閉じたら購読を外す。ローカル関数でも、取り込んでいる window が
+            // 同じインスタンスなのでデリゲートは等価と判定され、-= で正しく外れる。
+            void OnThemeChanged(object? sender, EventArgs e) => ApplyTitleBar(window);
+
+            ThemeChanged += OnThemeChanged;
+            window.Closed += (_, _) => ThemeChanged -= OnThemeChanged;
         }
 
         private static void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
@@ -151,7 +154,8 @@ namespace MyTaskTray.Services
                 int value = IsDark ? 1 : 0;
                 if (DwmSetWindowAttribute(handle, DwmUseImmersiveDarkMode, ref value, sizeof(int)) != 0)
                 {
-                    DwmSetWindowAttribute(handle, DwmUseImmersiveDarkModeBefore20H1, ref value, sizeof(int));
+                    // 古い Windows 向けの指定。ここも失敗したらタイトルバーの色は変わらないだけなので結果は見ない
+                    _ = DwmSetWindowAttribute(handle, DwmUseImmersiveDarkModeBefore20H1, ref value, sizeof(int));
                 }
             }
             catch (Exception)
@@ -249,7 +253,7 @@ namespace MyTaskTray.Services
                 System.Drawing.Color.FromArgb(0x51, 0x51, 0x51),
                 System.Drawing.Color.FromArgb(0x80, 0x80, 0x80));
 
-        [DllImport("dwmapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [DllImport("dwmapi.dll", SetLastError = true)]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     }
 }

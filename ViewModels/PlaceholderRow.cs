@@ -6,16 +6,11 @@ namespace MyTaskTray.ViewModels
     /// <summary>
     /// 「差し込みを挿入」パネルの 1 行。<see cref="Sample"/> には現在の展開結果を入れる。
     /// </summary>
-    public sealed class PlaceholderRow : INotifyPropertyChanged
+    public sealed class PlaceholderRow(PlaceholderInfo info) : INotifyPropertyChanged
     {
         private string _sample = string.Empty;
 
-        public PlaceholderRow(PlaceholderInfo info)
-        {
-            Info = info;
-        }
-
-        public PlaceholderInfo Info { get; }
+        public PlaceholderInfo Info { get; } = info;
 
         public string Token => Info.Token;
 

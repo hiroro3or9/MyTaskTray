@@ -49,7 +49,7 @@ namespace MyTaskTray.Services
                     return AppSettings.CreateDefault();
                 }
 
-                loaded.Items ??= new List<ClipItem>();
+                loaded.Items ??= [];
                 return loaded;
             }
             catch (Exception)

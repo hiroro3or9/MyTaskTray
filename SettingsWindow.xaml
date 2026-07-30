@@ -267,7 +267,7 @@
                 <DockPanel Margin="10">
                     <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
                         <TextBox x:Name="PlaceholderFilterBox" TextChanged="OnPlaceholderFilterChanged" />
-                        <TextBlock x:Name="PlaceholderFilterHint" Text="差し込みを検索（日付、連番 など）"
+                        <TextBlock x:Name="PlaceholderFilterHint" Text="差し込みを検索（日付、計算、連番 など）"
                                    Margin="10,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"
                                    Foreground="{DynamicResource Brush.Text.Disabled}" />
                     </Grid>
@@ -292,7 +292,7 @@
                                             ToolTip="{Binding Description}">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="185" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>

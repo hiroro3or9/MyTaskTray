@@ -15,6 +15,11 @@ namespace MyTaskTray.ViewModels
     {
         private readonly ICollectionView _itemsView;
 
+        // 画面上で「次の番号」を直接編集した項目の Id。
+        // 設定画面を開いている間にトレイ側で連番が進んでいた場合、
+        // 編集していない項目はトレイ側の値を優先して取り込む（保存時に巻き戻してしまわないため）。
+        private readonly HashSet<string> _sequenceEditedIds = new(StringComparer.Ordinal);
+
         private ClipItem? _selectedItem;
         private string _filterText = string.Empty;
         private bool _showCopyNotification;
@@ -26,7 +31,7 @@ namespace MyTaskTray.ViewModels
             _showCopyNotification = settings.ShowCopyNotification;
 
             Items = new ObservableCollection<ClipItem>(settings.Items);
-            KnownCategories = new ObservableCollection<string>();
+            KnownCategories = [];
             Placeholders = new ObservableCollection<PlaceholderRow>(
                 TemplateEngine.Placeholders.Select(p => new PlaceholderRow(p)));
 
@@ -55,6 +60,12 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>「差し込みを挿入」パネルに並べる一覧。</summary>
         public ObservableCollection<PlaceholderRow> Placeholders { get; }
+
+        /// <summary>
+        /// ユーザーが画面上で連番の値を直接編集した項目の <see cref="ClipItem.Id"/>。
+        /// 保存時、この項目だけは画面の値をそのまま使う。
+        /// </summary>
+        public IReadOnlySet<string> SequenceEditedIds => _sequenceEditedIds;
 
         /// <summary>保存されていない変更があるかどうか。</summary>
         public bool IsDirty
@@ -124,17 +135,11 @@ namespace MyTaskTray.ViewModels
                     return;
                 }
 
-                if (_selectedItem is not null)
-                {
-                    _selectedItem.PropertyChanged -= OnSelectedItemPropertyChanged;
-                }
+                _selectedItem?.PropertyChanged -= OnSelectedItemPropertyChanged;
 
                 _selectedItem = value;
 
-                if (_selectedItem is not null)
-                {
-                    _selectedItem.PropertyChanged += OnSelectedItemPropertyChanged;
-                }
+                _selectedItem?.PropertyChanged += OnSelectedItemPropertyChanged;
 
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(HasSelection));
@@ -217,12 +222,11 @@ namespace MyTaskTray.ViewModels
         /// <summary>既存項目のカテゴリを重複なく集めて候補を作り直す。</summary>
         public void RefreshCategories()
         {
-            List<string> categories = Items
+            List<string> categories = [.. Items
                 .Select(i => i.Category)
                 .Where(c => !string.IsNullOrWhiteSpace(c))
                 .Distinct(StringComparer.Ordinal)
-                .OrderBy(c => c, StringComparer.CurrentCulture)
-                .ToList();
+                .OrderBy(c => c, StringComparer.CurrentCulture)];
 
             KnownCategories.Clear();
             foreach (string category in categories)
@@ -241,7 +245,7 @@ namespace MyTaskTray.ViewModels
         {
             Version = Version,
             ShowCopyNotification = ShowCopyNotification,
-            Items = Items.Select(i => i.Clone()).ToList(),
+            Items = [.. Items.Select(i => i.Clone())],
         };
 
         /// <summary>保存が完了したことを伝える。</summary>
@@ -301,9 +305,20 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.Text):
                 case nameof(ClipItem.Category):
                 case nameof(ClipItem.IsSeparator):
-                case nameof(ClipItem.SequenceValue):
                 case nameof(ClipItem.SequenceStep):
                     IsDirty = true;
+                    break;
+
+                case nameof(ClipItem.SequenceValue):
+                    IsDirty = true;
+
+                    // 「次の番号」を画面で直接指定した場合は、トレイ側で進んだ値より優先する。
+                    // 増分だけを変えたときは番号に触っていないため、ここには入らない。
+                    if (sender is ClipItem edited && !string.IsNullOrEmpty(edited.Id))
+                    {
+                        _sequenceEditedIds.Add(edited.Id);
+                    }
+
                     break;
             }
 

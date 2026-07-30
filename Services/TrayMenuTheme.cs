@@ -91,27 +91,17 @@ namespace MyTaskTray.Services
             public override Color SeparatorLight => _background;
         }
 
-        private sealed class DarkRenderer : ToolStripProfessionalRenderer
+        private sealed class DarkRenderer(ProfessionalColorTable colorTable, Color text, Color disabled) : ToolStripProfessionalRenderer(colorTable)
         {
-            private readonly Color _text;
-            private readonly Color _disabled;
-
-            public DarkRenderer(ProfessionalColorTable colorTable, Color text, Color disabled)
-                : base(colorTable)
-            {
-                _text = text;
-                _disabled = disabled;
-            }
-
             protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
             {
-                e.TextColor = e.Item is null || e.Item.Enabled ? _text : _disabled;
+                e.TextColor = e.Item is null || e.Item.Enabled ? text : disabled;
                 base.OnRenderItemText(e);
             }
 
             protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
             {
-                e.ArrowColor = e.Item is null || e.Item.Enabled ? _text : _disabled;
+                e.ArrowColor = e.Item is null || e.Item.Enabled ? text : disabled;
                 base.OnRenderArrow(e);
             }
         }

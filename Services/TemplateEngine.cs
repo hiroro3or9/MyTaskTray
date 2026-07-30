@@ -14,33 +14,32 @@ namespace MyTaskTray.Services
     /// コピー文字列に含まれる <c>{...}</c> 形式の差し込みを展開する。
     ///
     /// 書式: <c>{名前[±数値[単位]][:書式]}</c>
-    ///   例) {date}  {date:yyyyMMdd}  {date+1}  {date-1w:M月d日}  {seq:0000}  {guid}
+    ///   例) {date}  {date:yyyyMMdd}  {date+1}  {date-1w:M月d日}  {seq:0000}  {seq+1}  {guid}
+    /// 計算式: <c>{calc:式[|書式]}</c>（<c>{=式}</c> と書いてもよい）
+    ///   例) {calc:(1000+200)*1.1}  {calc:1000*8%|#,##0}  {calc:{seq}*100}
     /// <c>{{</c> と <c>}}</c> はそれぞれ <c>{</c> <c>}</c> のエスケープ。
-    /// 解釈できない差し込みは、書いたままの文字列を残す。
+    /// 解釈できない差し込み（未知の名前・単位・書式、オフセットを付けられない差し込みなど）は、
+    /// 書いたままの文字列を残してユーザーが誤りに気付けるようにする。
     /// </summary>
-    public static class TemplateEngine
+    public static partial class TemplateEngine
     {
         private const string DefaultDateFormat = "yyyy/MM/dd";
         private const string DefaultTimeFormat = "HH:mm";
         private const string DefaultDateTimeFormat = "yyyy/MM/dd HH:mm";
 
-        // {{ / }} のエスケープ、または { ... } の差し込み
-        private static readonly Regex TokenRegex = new(
-            @"\{\{|\}\}|\{(?<inner>[^{}]*)\}",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        /// <summary>計算式の中の差し込みを展開する際の入れ子の上限。</summary>
+        private const int MaxDepth = 8;
 
-        // 名前 + 任意のオフセット + 任意の書式
-        private static readonly Regex InnerRegex = new(
+        // 名前 + 任意のオフセット + 任意の書式。
+        // GeneratedRegex はコンパイル時に実装を生成するため、RegexOptions.Compiled は不要。
+        [GeneratedRegex(
             @"^(?<name>[A-Za-z]+)(?:(?<sign>[+\-])(?<num>\d+)(?<unit>[A-Za-z]*))?(?::(?<fmt>.*))?$",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-        private static readonly Regex SequenceRegex = new(
-            @"\{seq(?:[+\-]\d+[A-Za-z]*)?(?::[^{}]*)?\}",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant)]
+        private static partial Regex InnerRegex();
 
         /// <summary>設定画面の「差し込みを挿入」で提示する一覧（並び順がパネルの表示順になる）。</summary>
-        public static IReadOnlyList<PlaceholderInfo> Placeholders { get; } = new List<PlaceholderInfo>
-        {
+        public static IReadOnlyList<PlaceholderInfo> Placeholders { get; } =
+        [
             new("{date}", "日付", "今日の日付"),
             new("{date:yyyyMMdd}", "日付", "書式を指定した日付"),
             new("{date:yyyy年M月d日}", "日付", "和文の日付"),
@@ -54,46 +53,215 @@ namespace MyTaskTray.Services
             new("{monthend}", "月・週", "今月の末日（+1 で翌月）"),
             new("{weekstart}", "月・週", "今週の月曜日（+1 で翌週）"),
             new("{weekend}", "月・週", "今週の日曜日"),
+            new("{calc:(1000+200)*1.1}", "計算", "式を計算する（+ - * / ^ とかっこ）"),
+            new("{calc:1000*8%}", "計算", "パーセント。8% は 0.08 として扱う"),
+            new("{calc:1000*1.1|#,##0}", "計算", "| のうしろは数値の書式（#,##0 / 0.00 など）"),
+            new("{calc:round(1000/3,2)}", "計算", "四捨五入。floor / ceil / trunc も同様"),
+            new("{calc:max(1,2,3)}", "計算", "関数: min max sum avg abs sqrt pow mod sign log exp"),
+            new("{calc:{seq}*100}", "計算", "式の中で他の差し込みを参照できる"),
+            new("{=1+2}", "計算", "{calc:…} の短い書き方"),
+            new("{year}", "日付の数値", "今年（4 桁の数値。+1 で翌年）"),
+            new("{month}", "日付の数値", "今月（1〜12。{month:00} で 2 桁）"),
+            new("{day}", "日付の数値", "今日の日（1〜31）"),
+            new("{dow}", "日付の数値", "曜日番号（月曜=1 〜 日曜=7）"),
+            new("{week}", "日付の数値", "ISO の週番号"),
+            new("{doy}", "日付の数値", "元日からの通日"),
+            new("{daysinmonth}", "日付の数値", "今月の日数"),
+            new("{daysuntil:2026-12-31}", "日付の数値", "指定日までの日数（過ぎていれば負の数）"),
             new("{seq}", "連番・その他", "連番。コピーするたびに増える"),
             new("{seq:0000}", "連番・その他", "桁を揃えた連番"),
+            new("{seq+1}", "連番・その他", "次の番号 + 1（範囲を書くときなど）"),
             new("{guid}", "連番・その他", "GUID（小文字・ハイフンあり）"),
             new("{guid:N}", "連番・その他", "GUID（ハイフンなし / B 波かっこ / U 大文字）"),
             new("{random}", "連番・その他", "1〜100 の乱数"),
             new("{random:1-6}", "連番・その他", "範囲を指定した乱数"),
             new("{{", "連番・その他", "波かっこ { そのもの（}} なら }）"),
-        };
+        ];
 
         /// <summary>差し込みを展開した文字列を返す。</summary>
         public static string Expand(string template, DateTime now, int sequenceValue)
+            => Expand(template, now, sequenceValue, 0, false);
+
+        /// <summary>
+        /// 差し込みを展開する。計算式は中に別の差し込みを書けるため、
+        /// 正規表現ではなく前から 1 文字ずつ読み、かっこの対応を数えて切り出す。
+        /// </summary>
+        /// <param name="numericOnly">
+        /// <c>{calc:…}</c> の式の中を展開しているとき true。
+        /// 数値にならない差し込み（<c>{date}</c> など）は誤った計算結果になるため、
+        /// このとき展開結果が数値かどうかを確かめ、数値でなければ例外にする。
+        /// </param>
+        private static string Expand(string template, DateTime now, int sequenceValue, int depth, bool numericOnly)
         {
             if (string.IsNullOrEmpty(template))
             {
                 return string.Empty;
             }
 
-            return TokenRegex.Replace(template, match =>
+            if (depth > MaxDepth)
             {
-                if (match.Value == "{{")
+                // 差し込みが入れ子で循環している場合の保険
+                return template;
+            }
+
+            StringBuilder sb = new(template.Length);
+            int i = 0;
+
+            while (i < template.Length)
+            {
+                char c = template[i];
+
+                if (c == '{' || c == '}')
                 {
-                    return "{";
+                    // {{ }} はエスケープ
+                    if (i + 1 < template.Length && template[i + 1] == c)
+                    {
+                        sb.Append(c);
+                        i += 2;
+                        continue;
+                    }
+
+                    int close = c == '{' ? FindClosingBrace(template, i) : -1;
+                    if (close < 0)
+                    {
+                        sb.Append(c);
+                        i++;
+                        continue;
+                    }
+
+                    string inner = template[(i + 1)..close];
+                    string token = template[i..(close + 1)];
+                    string expanded = ExpandToken(inner, token, now, sequenceValue, depth);
+
+                    // 式の中で {date} のような文字列の差し込みを使うと
+                    // 2026/07/30 が「2026 ÷ 7 ÷ 30」として計算されてしまうため、ここで弾く
+                    if (numericOnly && !LooksLikeNumber(expanded))
+                    {
+                        throw new FormatException($"{token} は数値にならないため式の中では使えません。");
+                    }
+
+                    sb.Append(expanded);
+                    i = close + 1;
+                    continue;
                 }
 
-                if (match.Value == "}}")
-                {
-                    return "}";
-                }
+                sb.Append(c);
+                i++;
+            }
 
-                return ExpandToken(match.Groups["inner"].Value, match.Value, now, sequenceValue);
-            });
+            return sb.ToString();
         }
 
-        /// <summary>連番の差し込みを含むかどうか。含む場合、コピー後にカウンターを進める。</summary>
-        public static bool ContainsSequence(string template)
-            => !string.IsNullOrEmpty(template) && SequenceRegex.IsMatch(template);
-
-        private static string ExpandToken(string inner, string original, DateTime now, int sequenceValue)
+        /// <summary>
+        /// <paramref name="open"/> の <c>{</c> に対応する <c>}</c> の位置を返す。
+        /// 見つからなければ -1。
+        /// </summary>
+        private static int FindClosingBrace(string text, int open)
         {
-            Match m = InnerRegex.Match(inner.Trim());
+            int depth = 0;
+
+            for (int i = open; i < text.Length; i++)
+            {
+                char c = text[i];
+
+                if (c != '{' && c != '}')
+                {
+                    continue;
+                }
+
+                // エスケープはまとめて読み飛ばす
+                if (i + 1 < text.Length && text[i + 1] == c)
+                {
+                    i++;
+                    continue;
+                }
+
+                depth += c == '{' ? 1 : -1;
+                if (depth == 0)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// 連番の差し込みを含むかどうか。含む場合、コピー後にカウンターを進める。
+        /// <c>{{seq}}</c> のようにエスケープした場合はリテラルの文字列になるため、含まないと判定する。
+        /// </summary>
+        public static bool ContainsSequence(string template) => ContainsSequence(template, 0);
+
+        private static bool ContainsSequence(string template, int depth)
+        {
+            if (string.IsNullOrEmpty(template) || depth > MaxDepth)
+            {
+                return false;
+            }
+
+            int i = 0;
+
+            while (i < template.Length)
+            {
+                char c = template[i];
+
+                if (c != '{' && c != '}')
+                {
+                    i++;
+                    continue;
+                }
+
+                // {{ }} はエスケープなので、中身は差し込みとして扱わない
+                if (i + 1 < template.Length && template[i + 1] == c)
+                {
+                    i += 2;
+                    continue;
+                }
+
+                int close = c == '{' ? FindClosingBrace(template, i) : -1;
+                if (close < 0)
+                {
+                    i++;
+                    continue;
+                }
+
+                string inner = template[(i + 1)..close];
+
+                // {seq} 自身か、{calc:{seq}*100} のように式の中で使われている場合
+                if (IsSequenceToken(inner) || ContainsSequence(inner, depth + 1))
+                {
+                    return true;
+                }
+
+                i = close + 1;
+            }
+
+            return false;
+        }
+
+        /// <summary>差し込みの中身が <c>{seq}</c> かどうか（書式やオフセット付きも含む）。</summary>
+        private static bool IsSequenceToken(string inner)
+        {
+            Match m = InnerRegex().Match(inner.Trim());
+            return m.Success && m.Groups["name"].Value.Equals("seq", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ExpandToken(string inner, string original, DateTime now, int sequenceValue, int depth)
+        {
+            string trimmed = inner.Trim();
+
+            // 計算式は式の中に差し込みを書けるので、名前の解析より先に振り分ける
+            if (trimmed.StartsWith('='))
+            {
+                return ExpandCalc(trimmed[1..], original, now, sequenceValue, depth);
+            }
+
+            if (trimmed.StartsWith("calc:", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExpandCalc(trimmed[5..], original, now, sequenceValue, depth);
+            }
+
+            Match m = InnerRegex().Match(trimmed);
             if (!m.Success)
             {
                 return original;
@@ -102,9 +270,10 @@ namespace MyTaskTray.Services
             string name = m.Groups["name"].Value.ToLowerInvariant();
             string format = m.Groups["fmt"].Success ? m.Groups["fmt"].Value : string.Empty;
 
+            bool hasOffset = m.Groups["num"].Success;
             int offset = 0;
             string unit = string.Empty;
-            if (m.Groups["num"].Success)
+            if (hasOffset)
             {
                 if (!int.TryParse(m.Groups["num"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out offset))
                 {
@@ -146,13 +315,56 @@ namespace MyTaskTray.Services
                         return FormatDate(WeekStart(Shift(now, offset, unit, "w")).AddDays(6), format, DefaultDateFormat);
 
                     case "seq":
-                        return FormatSequence(sequenceValue, format);
+                        // {seq+1} は「次の番号 + 1」。単位は意味を持たないため誤りとして扱う
+                        if (!string.IsNullOrEmpty(unit))
+                        {
+                            throw new FormatException("{seq} に単位は指定できません。");
+                        }
+
+                        return FormatSequence(unchecked(sequenceValue + offset), format);
 
                     case "guid":
+                        RejectOffset(name, hasOffset);
                         return FormatGuid(format);
 
                     case "random":
+                        RejectOffset(name, hasOffset);
                         return FormatRandom(format);
+
+                    case "year":
+                        return FormatNumber(Shift(now, offset, unit, "y").Year, format);
+
+                    case "month":
+                        return FormatNumber(Shift(now, offset, unit, "mo").Month, format);
+
+                    case "day":
+                        return FormatNumber(Shift(now, offset, unit, "d").Day, format);
+
+                    case "hour":
+                        return FormatNumber(Shift(now, offset, unit, "h").Hour, format);
+
+                    case "minute":
+                        return FormatNumber(Shift(now, offset, unit, "mi").Minute, format);
+
+                    case "second":
+                        return FormatNumber(Shift(now, offset, unit, "s").Second, format);
+
+                    case "dow":
+                        return FormatNumber(((int)Shift(now, offset, unit, "d").DayOfWeek + 6) % 7 + 1, format);
+
+                    case "doy":
+                        return FormatNumber(Shift(now, offset, unit, "d").DayOfYear, format);
+
+                    case "week":
+                        return FormatNumber(
+                            ISOWeek.GetWeekOfYear(Shift(now, offset, unit, "w").Date), format);
+
+                    case "daysinmonth":
+                        DateTime target = Shift(now, offset, unit, "mo");
+                        return FormatNumber(DateTime.DaysInMonth(target.Year, target.Month), format);
+
+                    case "daysuntil":
+                        return FormatDaysUntil(now, format, original);
 
                     default:
                         return original;
@@ -165,10 +377,104 @@ namespace MyTaskTray.Services
             }
         }
 
-        /// <summary>オフセットを適用する。単位が省略された場合は defaultUnit を使う。</summary>
+        /// <summary>
+        /// <c>{calc:式[|書式]}</c> を評価する。式の中の差し込みを先に展開してから計算する。
+        /// </summary>
+        private static string ExpandCalc(string body, string original, DateTime now, int sequenceValue, int depth)
+        {
+            (string expression, string format) = SplitCalcFormat(body);
+
+            try
+            {
+                // {seq} や {daysuntil:…} を式の中で使えるようにする。
+                // 数値にならない差し込みが混ざっていた場合はここで例外になる。
+                string resolved = Expand(expression, now, sequenceValue, depth + 1, true);
+                return ExpressionEvaluator.Format(ExpressionEvaluator.Evaluate(resolved), format);
+            }
+            catch (Exception)
+            {
+                // 式が誤っていればそのまま残し、コピー結果から気付けるようにする
+                return original;
+            }
+        }
+
+        /// <summary>展開結果がそのまま数値として読めるかどうか。</summary>
+        private static bool LooksLikeNumber(string value)
+            => decimal.TryParse(
+                value.Trim(),
+                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out _);
+
+        /// <summary>オフセットを付けられない差し込みに付いていたら誤りとして扱う。</summary>
+        private static void RejectOffset(string name, bool hasOffset)
+        {
+            if (hasOffset)
+            {
+                throw new FormatException($"{{{name}}} にオフセットは指定できません。");
+            }
+        }
+
+        /// <summary>式と書式を <c>|</c> で分ける。差し込みの中の <c>|</c> は無視する。</summary>
+        private static (string Expression, string Format) SplitCalcFormat(string body)
+        {
+            int depth = 0;
+
+            for (int i = body.Length - 1; i >= 0; i--)
+            {
+                char c = body[i];
+
+                if (c == '}')
+                {
+                    depth++;
+                }
+                else if (c == '{')
+                {
+                    depth--;
+                }
+                else if (c == '|' && depth == 0)
+                {
+                    return (body[..i], body[(i + 1)..].Trim());
+                }
+            }
+
+            return (body, string.Empty);
+        }
+
+        private static string FormatNumber(int value, string format)
+            => string.IsNullOrEmpty(format)
+                ? value.ToString(CultureInfo.InvariantCulture)
+                : value.ToString(format, CultureInfo.CurrentCulture);
+
+        /// <summary>指定日までの日数。書式部分に基準日（yyyy-MM-dd など）を書く。</summary>
+        private static string FormatDaysUntil(DateTime now, string format, string original)
+        {
+            if (string.IsNullOrWhiteSpace(format))
+            {
+                return original;
+            }
+
+            string text = format.Trim();
+
+            // 2026-12-31 のような表記と、地域設定の表記（2026/12/31）の両方を受け付ける
+            if (!DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime target)
+                && !DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out target))
+            {
+                return original;
+            }
+
+            int days = (int)(target.Date - now.Date).TotalDays;
+            return days.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// オフセットを適用する。単位が省略された場合は defaultUnit を使う。
+        /// 単位を解釈できない場合（{date+1m} のような書き間違い）は例外にする。
+        /// 黙って今日の日付を返すと、ユーザーが誤りに気付けないため。
+        /// </summary>
         private static DateTime Shift(DateTime value, int offset, string unit, string defaultUnit)
         {
-            if (offset == 0)
+            if (offset == 0 && string.IsNullOrEmpty(unit))
             {
                 return value;
             }
@@ -183,7 +489,8 @@ namespace MyTaskTray.Services
                 "h" => value.AddHours(offset),
                 "mi" => value.AddMinutes(offset),
                 "s" => value.AddSeconds(offset),
-                _ => value,
+                _ => throw new FormatException(
+                    $"単位 '{unit}' を解釈できません。d 日 / w 週 / mo 月 / y 年 / h 時 / mi 分 / s 秒 が使えます。"),
             };
         }
 
@@ -274,8 +581,29 @@ namespace MyTaskTray.Services
                 });
             }
 
-            string oneLine = sb.ToString();
-            return oneLine.Length <= maxLength ? oneLine : oneLine[..maxLength] + "…";
+            return Truncate(sb.ToString(), maxLength);
+        }
+
+        /// <summary>
+        /// 指定した長さで切り詰めて末尾に … を付ける。
+        /// サロゲートペア（絵文字など）の途中で切ると文字が壊れるため、その場合は 1 つ手前で切る。
+        /// </summary>
+        public static string Truncate(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
+            {
+                return value;
+            }
+
+            int end = maxLength;
+
+            // 切る位置の直前が上位サロゲートなら、対になる下位サロゲートと分断されてしまう
+            if (end > 0 && char.IsHighSurrogate(value[end - 1]))
+            {
+                end--;
+            }
+
+            return value[..end] + "…";
         }
     }
 }

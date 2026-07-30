@@ -107,7 +107,9 @@ namespace MyTaskTray
             // フォールバック: 自分でメニューを出し、前面に持ってくることで
             // 別の場所をクリックしたときに閉じるようにする
             menu.Show(System.Windows.Forms.Cursor.Position);
-            SetForegroundWindow(menu.Handle);
+
+            // 前面に持ってこられなくてもメニュー自体は出ているため、結果は見ない
+            _ = SetForegroundWindow(menu.Handle);
         }
 
         private void OnThemeChanged(object? sender, EventArgs e)
@@ -128,6 +130,10 @@ namespace MyTaskTray
             };
 
             BuildClipItems(menu.Items);
+
+            // 先頭・末尾・連続した区切り線を取り除く。
+            // これをしないと、下で足す区切り線と重なって線が二重に描かれる。
+            TrimEdgeSeparators(menu.Items);
 
             if (menu.Items.Count > 0)
             {
@@ -153,9 +159,45 @@ namespace MyTaskTray
 
             ContextMenuStrip? old = _notifyIcon.ContextMenuStrip;
             _notifyIcon.ContextMenuStrip = menu;
-            old?.Dispose();
+            DisposeMenu(old);
 
             _notifyIcon.Text = BuildIconToolTip();
+        }
+
+        /// <summary>
+        /// 使わなくなったメニューを破棄する。
+        /// テーマの切り替えや設定の保存はメニューを開いたままでも起こるため、
+        /// 表示中のメニューをそのまま破棄すると操作中に例外になる。閉じてから破棄する。
+        /// </summary>
+        private static void DisposeMenu(ContextMenuStrip? menu)
+        {
+            if (menu is null)
+            {
+                return;
+            }
+
+            if (!menu.Visible)
+            {
+                menu.Dispose();
+                return;
+            }
+
+            void OnClosed(object? sender, ToolStripDropDownClosedEventArgs e)
+            {
+                menu.Closed -= OnClosed;
+
+                // Closed の中はまだ閉じる処理の途中のため、いったん戻してから破棄する
+                System.Windows.Application? app = System.Windows.Application.Current;
+                if (app is null)
+                {
+                    menu.Dispose();
+                    return;
+                }
+
+                app.Dispatcher.BeginInvoke(new Action(menu.Dispose));
+            }
+
+            menu.Closed += OnClosed;
         }
 
         /// <summary>トレイアイコンにマウスを乗せたときの説明。</summary>
@@ -228,6 +270,13 @@ namespace MyTaskTray
         private ToolStripMenuItem CreateClipMenuItem(ClipItem item)
         {
             string label = string.IsNullOrWhiteSpace(item.Name) ? item.Text : item.Name;
+
+            // 名前もコピー文字列も空だと、クリックできるのに何も見えない行になってしまう
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                label = "(空の項目)";
+            }
+
             ToolStripMenuItem menuItem = new(EscapeAmpersand(Truncate(label, MenuTextMaxLength)))
             {
                 ToolTipText = BuildToolTip(item),
@@ -289,8 +338,16 @@ namespace MyTaskTray
 
             if (_settings.ShowCopyNotification)
             {
-                string label = string.IsNullOrWhiteSpace(item.Name) ? "コピーしました" : item.Name;
-                ToastWindow.ShowToast(label, TemplateEngine.ToSingleLine(value, 120));
+                if (string.IsNullOrEmpty(value))
+                {
+                    // 空の文字列はクリップボードを空にする動作になるため、そのまま伝える
+                    ToastWindow.ShowToast("クリップボードを空にしました", "コピーする文字列が空の項目です");
+                }
+                else
+                {
+                    string label = string.IsNullOrWhiteSpace(item.Name) ? "コピーしました" : item.Name;
+                    ToastWindow.ShowToast(label, TemplateEngine.ToSingleLine(value, 120));
+                }
             }
 
             // 連番を使った場合はカウンターを進めて保存する
@@ -339,8 +396,31 @@ namespace MyTaskTray
             _settingsWindow.Activate();
         }
 
+        /// <summary>
+        /// アプリを終了する。設定画面が開いている場合は先に閉じる。
+        /// Shutdown() から閉じると未保存の確認でキャンセルしても終了が止まらないため、
+        /// ここで閉じた結果を見てから終了する。
+        /// </summary>
         private void ExitApplication()
         {
+            if (_settingsWindow is not null)
+            {
+                _settingsWindow.Close();
+
+                // 閉じられていれば Closed で null になっている。
+                // 残っている場合は未保存の確認でキャンセルされたので、終了もしない
+                if (_settingsWindow is not null)
+                {
+                    if (_settingsWindow.WindowState == WindowState.Minimized)
+                    {
+                        _settingsWindow.WindowState = WindowState.Normal;
+                    }
+
+                    _settingsWindow.Activate();
+                    return;
+                }
+            }
+
             _notifyIcon.Visible = false;
             System.Windows.Application.Current.Shutdown();
         }
@@ -350,21 +430,29 @@ namespace MyTaskTray
         {
             while (items.Count > 0 && items[0] is ToolStripSeparator)
             {
-                items.RemoveAt(0);
+                RemoveAndDispose(items, 0);
             }
 
             while (items.Count > 0 && items[items.Count - 1] is ToolStripSeparator)
             {
-                items.RemoveAt(items.Count - 1);
+                RemoveAndDispose(items, items.Count - 1);
             }
 
             for (int i = items.Count - 1; i > 0; i--)
             {
                 if (items[i] is ToolStripSeparator && items[i - 1] is ToolStripSeparator)
                 {
-                    items.RemoveAt(i);
+                    RemoveAndDispose(items, i);
                 }
             }
+        }
+
+        /// <summary>取り除いた項目はメニューから外れても残るため、明示的に破棄する。</summary>
+        private static void RemoveAndDispose(ToolStripItemCollection items, int index)
+        {
+            ToolStripItem item = items[index];
+            items.RemoveAt(index);
+            item.Dispose();
         }
 
         /// <summary>メニュー表示用に改行を可視化し、長すぎる場合は省略する。</summary>
@@ -376,9 +464,7 @@ namespace MyTaskTray
                 .Replace('\r', '⏎')
                 .Replace('\t', ' ');
 
-            return oneLine.Length <= maxLength
-                ? oneLine
-                : oneLine[..maxLength] + "…";
+            return TemplateEngine.Truncate(oneLine, maxLength);
         }
 
         /// <summary>ToolStrip がニーモニックとして解釈しないよう &amp; をエスケープする。</summary>

@@ -21,7 +21,7 @@ namespace MyTaskTray
         private readonly SettingsViewModel _vm;
         private readonly DispatcherTimer _previewTimer;
         // XAML の初期化中に TextChanged が走ることがあるため、null を許容する
-        private CollectionViewSource? _placeholderView;
+        private readonly CollectionViewSource? _placeholderView;
 
         private Point _dragStartPoint;
         private bool _dragArmed;
@@ -360,12 +360,9 @@ namespace MyTaskTray
 
         private void OnPlaceholderFilterChanged(object sender, TextChangedEventArgs e)
         {
-            if (PlaceholderFilterHint is not null)
-            {
-                PlaceholderFilterHint.Visibility = string.IsNullOrEmpty(PlaceholderFilterBox.Text)
+            PlaceholderFilterHint?.Visibility = string.IsNullOrEmpty(PlaceholderFilterBox.Text)
                     ? Visibility.Visible
                     : Visibility.Collapsed;
-            }
 
             _placeholderView?.View?.Refresh();
         }
@@ -449,10 +446,7 @@ namespace MyTaskTray
 
         private void OnResetSequence(object sender, RoutedEventArgs e)
         {
-            if (_vm.SelectedItem is not null)
-            {
-                _vm.SelectedItem.SequenceValue = 1;
-            }
+            _vm.SelectedItem?.SequenceValue = 1;
         }
 
         private void OnCopyPreview(object sender, RoutedEventArgs e)
@@ -519,6 +513,9 @@ namespace MyTaskTray
         {
             AppSettings settings = _vm.ToSettings();
 
+            // 設定画面を開いている間にトレイからコピーされて進んだ連番を取り込む
+            AdoptExternalSequenceValues(settings);
+
             foreach (ClipItem item in settings.Items)
             {
                 // 表示名が空の項目はコピー文字列を名前として使う
@@ -548,6 +545,48 @@ namespace MyTaskTray
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// 設定画面は開いた時点の内容を編集しているため、そのまま保存すると
+        /// 開いている間にトレイからコピーされて進んだ連番を巻き戻してしまう。
+        /// <see cref="ClipItem.Id"/> で突き合わせ、ファイル側の新しい連番を取り込む。
+        /// 画面上で「次の番号」を直接編集した項目は、ユーザーの指定を優先して対象外にする。
+        /// </summary>
+        private void AdoptExternalSequenceValues(AppSettings settings)
+        {
+            AppSettings latest;
+            try
+            {
+                latest = SettingsStore.Load();
+            }
+            catch (Exception)
+            {
+                // 読み直せない場合は画面の内容をそのまま保存する
+                return;
+            }
+
+            Dictionary<string, int> sequences = new(StringComparer.Ordinal);
+            foreach (ClipItem item in latest.Items)
+            {
+                if (!string.IsNullOrEmpty(item.Id))
+                {
+                    sequences[item.Id] = item.SequenceValue;
+                }
+            }
+
+            foreach (ClipItem item in settings.Items)
+            {
+                if (string.IsNullOrEmpty(item.Id) || _vm.SequenceEditedIds.Contains(item.Id))
+                {
+                    continue;
+                }
+
+                if (sequences.TryGetValue(item.Id, out int value))
+                {
+                    item.SequenceValue = value;
+                }
             }
         }
 

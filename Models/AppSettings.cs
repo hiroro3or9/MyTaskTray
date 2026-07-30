@@ -9,7 +9,7 @@ namespace MyTaskTray.Models
         public int Version { get; set; } = 1;
 
         /// <summary>コピー項目。リストの順序がそのままメニューの順序になる。</summary>
-        public List<ClipItem> Items { get; set; } = new();
+        public List<ClipItem> Items { get; set; } = [];
 
         /// <summary>コピーしたときに画面右下へ小さな通知を出すかどうか。</summary>
         public bool ShowCopyNotification { get; set; } = true;
@@ -17,8 +17,8 @@ namespace MyTaskTray.Models
         /// <summary>初回起動時に表示するサンプル設定を作る。</summary>
         public static AppSettings CreateDefault() => new()
         {
-            Items = new List<ClipItem>
-            {
+            Items =
+            [
                 new() { Name = "メールアドレス", Text = "example@example.com" },
                 new() { Name = "電話番号", Text = "03-0000-0000" },
                 new() { IsSeparator = true },
@@ -31,14 +31,14 @@ namespace MyTaskTray.Models
                 new() { Category = "定型文", Name = "お礼", Text = "お世話になっております。ご対応ありがとうございました。" },
                 new() { Category = "定型文", Name = "確認依頼", Text = "ご確認のほど、よろしくお願いいたします。" },
                 new() { Category = "定型文", Name = "議事録の見出し", Text = "# {date:yyyy/MM/dd} 定例ミーティング 議事録" },
-            },
+            ],
         };
 
         public AppSettings Clone() => new()
         {
             Version = Version,
             ShowCopyNotification = ShowCopyNotification,
-            Items = Items.Select(i => i.Clone()).ToList(),
+            Items = [.. Items.Select(i => i.Clone())],
         };
     }
 }
