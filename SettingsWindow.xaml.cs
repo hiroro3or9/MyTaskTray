@@ -1,0 +1,626 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using MyTaskTray.Models;
+using MyTaskTray.Services;
+using MyTaskTray.ViewModels;
+
+namespace MyTaskTray
+{
+    /// <summary>
+    /// コピー項目を編集する設定画面。
+    /// </summary>
+    public partial class SettingsWindow : Window
+    {
+        private readonly SettingsViewModel _vm;
+        private readonly DispatcherTimer _previewTimer;
+        // XAML の初期化中に TextChanged が走ることがあるため、null を許容する
+        private CollectionViewSource? _placeholderView;
+
+        private Point _dragStartPoint;
+        private bool _dragArmed;
+        private ClipItem? _draggingItem;
+
+        public SettingsWindow(AppSettings settings)
+        {
+            InitializeComponent();
+
+            _vm = new SettingsViewModel(settings);
+            DataContext = _vm;
+
+            FolderButton.ToolTip = "設定ファイル: " + SettingsStore.FilePath;
+
+            // 差し込み一覧はカテゴリごとに見出しを付けて表示する
+            _placeholderView = new CollectionViewSource { Source = _vm.Placeholders };
+            _placeholderView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(PlaceholderRow.Group)));
+            _placeholderView.Filter += OnPlaceholderFilter;
+            PlaceholderList.ItemsSource = _placeholderView.View;
+
+            // {time} などがあるため、プレビューを 1 秒ごとに追従させる
+            _previewTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromSeconds(1),
+            };
+            _previewTimer.Tick += (_, _) => _vm.RefreshPreview();
+            _previewTimer.Start();
+
+            Closed += (_, _) => _previewTimer.Stop();
+
+            ThemeManager.Attach(this);
+        }
+
+        /// <summary>保存して閉じた場合に true。</summary>
+        public bool Saved { get; private set; }
+
+        // ==================================================================
+        // 一覧の操作
+        // ==================================================================
+
+        private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            _vm.RefreshCategories();
+        }
+
+        private void OnAddItem(object sender, RoutedEventArgs e)
+        {
+            ClipItem item = new()
+            {
+                Name = "新しい項目",
+                Text = string.Empty,
+                Category = _vm.SelectedItem?.Category ?? string.Empty,
+            };
+
+            ClearFilter();
+            InsertAfterSelection(item);
+
+            // 編集欄が表示され終わってから入力欄にフォーカスを移す
+            Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    NameBox.Focus();
+                    NameBox.SelectAll();
+                }),
+                DispatcherPriority.Input);
+        }
+
+        private void OnAddSeparator(object sender, RoutedEventArgs e)
+        {
+            ClearFilter();
+            InsertAfterSelection(new ClipItem { IsSeparator = true });
+        }
+
+        private void OnDuplicateItem(object sender, RoutedEventArgs e)
+        {
+            if (_vm.SelectedItem is null)
+            {
+                return;
+            }
+
+            ClipItem copy = _vm.SelectedItem.Clone();
+            copy.Id = Guid.NewGuid().ToString("N");
+            if (!copy.IsSeparator)
+            {
+                copy.Name = string.IsNullOrWhiteSpace(copy.Name) ? copy.Name : copy.Name + " のコピー";
+            }
+
+            ClearFilter();
+            InsertAfterSelection(copy);
+        }
+
+        private void OnDeleteItem(object sender, RoutedEventArgs e)
+        {
+            if (_vm.SelectedItem is not ClipItem target)
+            {
+                return;
+            }
+
+            // 中身のある項目は誤操作を防ぐために確認する
+            if (!target.IsSeparator
+                && (!string.IsNullOrWhiteSpace(target.Text) || !string.IsNullOrWhiteSpace(target.Name)))
+            {
+                MessageBoxResult answer = MessageBox.Show(
+                    $"「{target.DisplayLabel}」を削除しますか？",
+                    "MyTaskTray",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Question);
+
+                if (answer != MessageBoxResult.OK)
+                {
+                    return;
+                }
+            }
+
+            int index = _vm.Items.IndexOf(target);
+            _vm.Items.RemoveAt(index);
+            _vm.SelectedItem = _vm.Items.Count == 0
+                ? null
+                : _vm.Items[Math.Min(index, _vm.Items.Count - 1)];
+            _vm.RefreshCategories();
+            ItemsList.Focus();
+        }
+
+        private void OnMoveUp(object sender, RoutedEventArgs e) => Move(-1);
+
+        private void OnMoveDown(object sender, RoutedEventArgs e) => Move(1);
+
+        private void Move(int offset)
+        {
+            if (!_vm.CanReorder || _vm.SelectedItem is null)
+            {
+                return;
+            }
+
+            ClipItem moving = _vm.SelectedItem;
+            int index = _vm.Items.IndexOf(moving);
+            int target = index + offset;
+            if (target < 0 || target >= _vm.Items.Count)
+            {
+                return;
+            }
+
+            _vm.Items.Move(index, target);
+
+            // ListBox は Move で選択が外れることがあるため、選択し直す
+            _vm.SelectedItem = moving;
+            ItemsList.ScrollIntoView(moving);
+        }
+
+        private void InsertAfterSelection(ClipItem item)
+        {
+            int index = _vm.SelectedItem is null
+                ? _vm.Items.Count
+                : _vm.Items.IndexOf(_vm.SelectedItem) + 1;
+
+            _vm.Items.Insert(index, item);
+            _vm.SelectedItem = item;
+            ItemsList.ScrollIntoView(item);
+            _vm.RefreshCategories();
+        }
+
+        private void OnClearFilter(object sender, RoutedEventArgs e)
+        {
+            ClearFilter();
+            FilterBox.Focus();
+        }
+
+        private void ClearFilter() => _vm.FilterText = string.Empty;
+
+        private void OnListPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Delete)
+            {
+                OnDeleteItem(sender, e);
+                e.Handled = true;
+            }
+        }
+
+        // ==================================================================
+        // ドラッグ＆ドロップでの並べ替え
+        // ==================================================================
+
+        private void OnListPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _dragStartPoint = e.GetPosition(null);
+            _dragArmed = true;
+        }
+
+        private void OnListPreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_dragArmed || e.LeftButton != MouseButtonState.Pressed)
+            {
+                return;
+            }
+
+            Vector moved = _dragStartPoint - e.GetPosition(null);
+            if (Math.Abs(moved.X) < SystemParameters.MinimumHorizontalDragDistance
+                && Math.Abs(moved.Y) < SystemParameters.MinimumVerticalDragDistance)
+            {
+                return;
+            }
+
+            _dragArmed = false;
+
+            // 絞り込み中は表示順と実際の順序がずれるため、並べ替えさせない
+            if (_vm.HasFilter)
+            {
+                return;
+            }
+
+            if (FindContainer(e.OriginalSource) is not ListBoxItem container
+                || container.DataContext is not ClipItem item)
+            {
+                return;
+            }
+
+            _draggingItem = item;
+            try
+            {
+                DragDrop.DoDragDrop(container, item, DragDropEffects.Move);
+            }
+            finally
+            {
+                _draggingItem = null;
+                ClearDropIndicators();
+            }
+        }
+
+        private void OnListDragOver(object sender, DragEventArgs e)
+        {
+            ClearDropIndicators();
+
+            if (_draggingItem is null)
+            {
+                e.Effects = DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+
+            if (FindContainer(e.OriginalSource) is ListBoxItem container
+                && !ReferenceEquals(container.DataContext, _draggingItem))
+            {
+                bool below = e.GetPosition(container).Y > container.ActualHeight / 2;
+                DropIndicator.SetPosition(container, below ? DropPosition.Below : DropPosition.Above);
+            }
+
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+        }
+
+        private void OnListDragLeave(object sender, DragEventArgs e) => ClearDropIndicators();
+
+        private void OnListDrop(object sender, DragEventArgs e)
+        {
+            ClearDropIndicators();
+
+            if (_draggingItem is not ClipItem moving)
+            {
+                return;
+            }
+
+            int from = _vm.Items.IndexOf(moving);
+            if (from < 0)
+            {
+                return;
+            }
+
+            int to = _vm.Items.Count - 1;
+
+            if (FindContainer(e.OriginalSource) is ListBoxItem container
+                && container.DataContext is ClipItem dropTarget
+                && !ReferenceEquals(dropTarget, moving))
+            {
+                int targetIndex = _vm.Items.IndexOf(dropTarget);
+                bool below = e.GetPosition(container).Y > container.ActualHeight / 2;
+                to = below ? targetIndex + 1 : targetIndex;
+
+                // 自分を抜いた後の位置に合わせる
+                if (from < to)
+                {
+                    to--;
+                }
+            }
+
+            to = Math.Clamp(to, 0, _vm.Items.Count - 1);
+            if (to != from)
+            {
+                _vm.Items.Move(from, to);
+            }
+
+            _vm.SelectedItem = moving;
+            ItemsList.ScrollIntoView(moving);
+            e.Handled = true;
+        }
+
+        private void ClearDropIndicators()
+        {
+            foreach (object item in ItemsList.Items)
+            {
+                if (ItemsList.ItemContainerGenerator.ContainerFromItem(item) is ListBoxItem container)
+                {
+                    DropIndicator.SetPosition(container, DropPosition.None);
+                }
+            }
+        }
+
+        /// <summary>クリックされた要素から親をたどって行（ListBoxItem）を探す。</summary>
+        private static ListBoxItem? FindContainer(object? source)
+        {
+            DependencyObject? current = source as DependencyObject;
+
+            while (current is not null and not ListBoxItem)
+            {
+                current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                    ? VisualTreeHelper.GetParent(current)
+                    : LogicalTreeHelper.GetParent(current);
+            }
+
+            return current as ListBoxItem;
+        }
+
+        // ==================================================================
+        // 差し込みの挿入
+        // ==================================================================
+
+        private void OnOpenInsertPopup(object sender, RoutedEventArgs e)
+        {
+            _vm.RefreshPlaceholderSamples();
+            PlaceholderFilterBox.Clear();
+            InsertPopup.IsOpen = true;
+
+            Dispatcher.BeginInvoke(
+                new Action(() => PlaceholderFilterBox.Focus()),
+                DispatcherPriority.Input);
+        }
+
+        private void OnPlaceholderFilterChanged(object sender, TextChangedEventArgs e)
+        {
+            if (PlaceholderFilterHint is not null)
+            {
+                PlaceholderFilterHint.Visibility = string.IsNullOrEmpty(PlaceholderFilterBox.Text)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+
+            _placeholderView?.View?.Refresh();
+        }
+
+        private void OnPlaceholderFilter(object sender, FilterEventArgs e)
+        {
+            string keyword = PlaceholderFilterBox?.Text ?? string.Empty;
+            e.Accepted = e.Item is PlaceholderRow row && row.Matches(keyword);
+        }
+
+        /// <summary>選んだ差し込みをカーソル位置に挿入する。</summary>
+        private void OnInsertPlaceholder(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { DataContext: PlaceholderRow row })
+            {
+                return;
+            }
+
+            InsertPopup.IsOpen = false;
+
+            int caret = TextBox_Content.SelectionStart;
+            TextBox_Content.SelectedText = row.Token;
+            TextBox_Content.CaretIndex = caret + row.Token.Length;
+            TextBox_Content.Focus();
+        }
+
+        // ==================================================================
+        // カテゴリ候補
+        // ==================================================================
+
+        private void OnOpenCategoryPopup(object sender, RoutedEventArgs e)
+        {
+            if (!_vm.HasCategories)
+            {
+                return;
+            }
+
+            CategoryPopup.IsOpen = true;
+        }
+
+        private void OnPickCategory(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { DataContext: string category } || _vm.SelectedItem is null)
+            {
+                return;
+            }
+
+            CategoryPopup.IsOpen = false;
+            _vm.SelectedItem.Category = category;
+            CategoryBox.Focus();
+            CategoryBox.CaretIndex = CategoryBox.Text.Length;
+        }
+
+        private void OnPopupPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Escape)
+            {
+                return;
+            }
+
+            InsertPopup.IsOpen = false;
+            CategoryPopup.IsOpen = false;
+            e.Handled = true;
+        }
+
+        // ==================================================================
+        // 連番・プレビュー
+        // ==================================================================
+
+        private void OnDigitsOnly(object sender, TextCompositionEventArgs e)
+        {
+            foreach (char c in e.Text)
+            {
+                if (!char.IsDigit(c))
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
+        }
+
+        private void OnResetSequence(object sender, RoutedEventArgs e)
+        {
+            if (_vm.SelectedItem is not null)
+            {
+                _vm.SelectedItem.SequenceValue = 1;
+            }
+        }
+
+        private void OnCopyPreview(object sender, RoutedEventArgs e)
+        {
+            string value = _vm.Preview;
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            if (ClipboardService.TryCopy(value))
+            {
+                ToastWindow.ShowToast("コピーしました", TemplateEngine.ToSingleLine(value, 120));
+            }
+            else
+            {
+                MessageBox.Show(
+                    "クリップボードにコピーできませんでした。他のアプリが使用中の可能性があります。",
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+
+        // ==================================================================
+        // 保存・終了
+        // ==================================================================
+
+        private void OnOpenFolder(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Directory.CreateDirectory(SettingsStore.DirectoryPath);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = SettingsStore.DirectoryPath,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "設定フォルダーを開けませんでした。\n" + ex.Message,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+
+        private void OnSave(object sender, RoutedEventArgs e)
+        {
+            if (TrySave())
+            {
+                Close();
+            }
+        }
+
+        private void OnCancel(object sender, RoutedEventArgs e)
+        {
+            Close();
+        }
+
+        private bool TrySave()
+        {
+            AppSettings settings = _vm.ToSettings();
+
+            foreach (ClipItem item in settings.Items)
+            {
+                // 表示名が空の項目はコピー文字列を名前として使う
+                if (!item.IsSeparator && string.IsNullOrWhiteSpace(item.Name))
+                {
+                    item.Name = item.Text.Trim();
+                }
+
+                if (item.SequenceStep == 0)
+                {
+                    item.SequenceStep = 1;
+                }
+            }
+
+            try
+            {
+                SettingsStore.Save(settings);
+                Saved = true;
+                _vm.MarkSaved();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "設定を保存できませんでした。\n" + ex.Message,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return false;
+            }
+        }
+
+        private void OnWindowClosing(object sender, CancelEventArgs e)
+        {
+            if (Saved || !_vm.IsDirty)
+            {
+                return;
+            }
+
+            MessageBoxResult answer = MessageBox.Show(
+                "保存していない変更があります。保存して閉じますか？",
+                "MyTaskTray",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            switch (answer)
+            {
+                case MessageBoxResult.Yes:
+                    if (!TrySave())
+                    {
+                        e.Cancel = true;
+                    }
+
+                    break;
+
+                case MessageBoxResult.No:
+                    break;
+
+                default:
+                    e.Cancel = true;
+                    break;
+            }
+        }
+
+        private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            // Alt + ↑ / ↓ で並べ替え
+            if (e.Key == Key.System && (e.SystemKey == Key.Up || e.SystemKey == Key.Down))
+            {
+                Move(e.SystemKey == Key.Up ? -1 : 1);
+                e.Handled = true;
+                return;
+            }
+
+            if ((Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
+            {
+                return;
+            }
+
+            switch (e.Key)
+            {
+                case Key.S:
+                    OnSave(sender, e);
+                    e.Handled = true;
+                    break;
+
+                case Key.N:
+                    OnAddItem(sender, e);
+                    e.Handled = true;
+                    break;
+
+                case Key.D:
+                    OnDuplicateItem(sender, e);
+                    e.Handled = true;
+                    break;
+
+                case Key.F:
+                    FilterBox.Focus();
+                    FilterBox.SelectAll();
+                    e.Handled = true;
+                    break;
+            }
+        }
+    }
+}

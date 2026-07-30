@@ -1,0 +1,337 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Windows.Data;
+using MyTaskTray.Models;
+using MyTaskTray.Services;
+
+namespace MyTaskTray.ViewModels
+{
+    /// <summary>
+    /// 設定画面のためのビューモデル。
+    /// </summary>
+    public class SettingsViewModel : INotifyPropertyChanged
+    {
+        private readonly ICollectionView _itemsView;
+
+        private ClipItem? _selectedItem;
+        private string _filterText = string.Empty;
+        private bool _showCopyNotification;
+        private bool _isDirty;
+
+        public SettingsViewModel(AppSettings settings)
+        {
+            Version = settings.Version;
+            _showCopyNotification = settings.ShowCopyNotification;
+
+            Items = new ObservableCollection<ClipItem>(settings.Items);
+            KnownCategories = new ObservableCollection<string>();
+            Placeholders = new ObservableCollection<PlaceholderRow>(
+                TemplateEngine.Placeholders.Select(p => new PlaceholderRow(p)));
+
+            _itemsView = CollectionViewSource.GetDefaultView(Items);
+            _itemsView.Filter = o => o is ClipItem item && MatchesFilter(item);
+
+            RefreshCategories();
+            RefreshPlaceholderSamples();
+
+            // 変更を検知して「未保存」の状態を持つ
+            Items.CollectionChanged += OnItemsCollectionChanged;
+            foreach (ClipItem item in Items)
+            {
+                item.PropertyChanged += OnAnyItemPropertyChanged;
+            }
+
+            SelectedItem = Items.FirstOrDefault();
+        }
+
+        public int Version { get; }
+
+        public ObservableCollection<ClipItem> Items { get; }
+
+        /// <summary>カテゴリ入力欄の候補。</summary>
+        public ObservableCollection<string> KnownCategories { get; }
+
+        /// <summary>「差し込みを挿入」パネルに並べる一覧。</summary>
+        public ObservableCollection<PlaceholderRow> Placeholders { get; }
+
+        /// <summary>保存されていない変更があるかどうか。</summary>
+        public bool IsDirty
+        {
+            get => _isDirty;
+            private set
+            {
+                if (_isDirty == value)
+                {
+                    return;
+                }
+
+                _isDirty = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>コピー時に通知を出すかどうか。</summary>
+        public bool ShowCopyNotification
+        {
+            get => _showCopyNotification;
+            set
+            {
+                if (_showCopyNotification == value)
+                {
+                    return;
+                }
+
+                _showCopyNotification = value;
+                IsDirty = true;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>一覧の絞り込みキーワード。</summary>
+        public string FilterText
+        {
+            get => _filterText;
+            set
+            {
+                string next = value ?? string.Empty;
+                if (string.Equals(_filterText, next, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _filterText = next;
+                _itemsView.Refresh();
+
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasFilter));
+                OnPropertyChanged(nameof(CanReorder));
+                OnPropertyChanged(nameof(StatusText));
+            }
+        }
+
+        /// <summary>絞り込み中かどうか。</summary>
+        public bool HasFilter => !string.IsNullOrEmpty(_filterText);
+
+        public ClipItem? SelectedItem
+        {
+            get => _selectedItem;
+            set
+            {
+                if (ReferenceEquals(_selectedItem, value))
+                {
+                    return;
+                }
+
+                if (_selectedItem is not null)
+                {
+                    _selectedItem.PropertyChanged -= OnSelectedItemPropertyChanged;
+                }
+
+                _selectedItem = value;
+
+                if (_selectedItem is not null)
+                {
+                    _selectedItem.PropertyChanged += OnSelectedItemPropertyChanged;
+                }
+
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasSelection));
+                OnPropertyChanged(nameof(CanReorder));
+                OnPropertyChanged(nameof(IsItemEditable));
+                OnPropertyChanged(nameof(IsSequenceVisible));
+                OnPropertyChanged(nameof(ShowEditorHint));
+                OnPropertyChanged(nameof(EditorHint));
+                OnPropertyChanged(nameof(Preview));
+            }
+        }
+
+        public bool HasSelection => SelectedItem is not null;
+
+        /// <summary>並べ替えできるのは、絞り込みをしていないときだけ。</summary>
+        public bool CanReorder => HasSelection && !HasFilter;
+
+        /// <summary>区切り線は編集する内容がないため、編集欄自体を出さない。</summary>
+        public bool IsItemEditable => SelectedItem is not null && !SelectedItem.IsSeparator;
+
+        /// <summary>編集欄の代わりに案内を出すかどうか。</summary>
+        public bool ShowEditorHint => !IsItemEditable;
+
+        /// <summary>編集できないときに出す案内。</summary>
+        public string EditorHint => SelectedItem is null
+            ? "左の一覧から項目を選ぶか、「追加」で新しい項目を作成してください。"
+            : "区切り線には編集する内容がありません。メニューのグループ分けに使えます。";
+
+        /// <summary>選択項目が連番を使っているときだけ、連番の設定欄を出す。</summary>
+        public bool IsSequenceVisible => IsItemEditable && SelectedItem!.UsesSequence;
+
+        /// <summary>一覧の下に出す件数の表示。</summary>
+        public string StatusText
+        {
+            get
+            {
+                int total = Items.Count;
+                int copyItems = Items.Count(i => !i.IsSeparator);
+
+                if (!HasFilter)
+                {
+                    return $"{copyItems} 項目（区切り線 {total - copyItems}）";
+                }
+
+                int shown = Items.Count(MatchesFilter);
+                return $"{shown} / {copyItems} 項目を表示中（絞り込み中は並べ替えできません）";
+            }
+        }
+
+        /// <summary>差し込みを展開した結果。実際にコピーされる文字列。</summary>
+        public string Preview
+        {
+            get
+            {
+                if (SelectedItem is null || SelectedItem.IsSeparator)
+                {
+                    return string.Empty;
+                }
+
+                return TemplateEngine.Expand(SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue);
+            }
+        }
+
+        /// <summary>時刻の差し込みに追従させるため、外から再評価を促す。</summary>
+        public void RefreshPreview() => OnPropertyChanged(nameof(Preview));
+
+        /// <summary>差し込み一覧の「現在値」を今の時刻で作り直す。</summary>
+        public void RefreshPlaceholderSamples()
+        {
+            DateTime now = DateTime.Now;
+            int sequence = SelectedItem?.SequenceValue ?? 1;
+
+            foreach (PlaceholderRow row in Placeholders)
+            {
+                row.Sample = TemplateEngine.ToSingleLine(
+                    TemplateEngine.Expand(row.Token, now, sequence), 60);
+            }
+        }
+
+        /// <summary>既存項目のカテゴリを重複なく集めて候補を作り直す。</summary>
+        public void RefreshCategories()
+        {
+            List<string> categories = Items
+                .Select(i => i.Category)
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(c => c, StringComparer.CurrentCulture)
+                .ToList();
+
+            KnownCategories.Clear();
+            foreach (string category in categories)
+            {
+                KnownCategories.Add(category);
+            }
+
+            OnPropertyChanged(nameof(HasCategories));
+        }
+
+        /// <summary>カテゴリ候補があるかどうか。</summary>
+        public bool HasCategories => KnownCategories.Count > 0;
+
+        /// <summary>保存用の設定オブジェクトを作る。</summary>
+        public AppSettings ToSettings() => new()
+        {
+            Version = Version,
+            ShowCopyNotification = ShowCopyNotification,
+            Items = Items.Select(i => i.Clone()).ToList(),
+        };
+
+        /// <summary>保存が完了したことを伝える。</summary>
+        public void MarkSaved() => IsDirty = false;
+
+        private bool MatchesFilter(ClipItem item)
+        {
+            if (!HasFilter)
+            {
+                return true;
+            }
+
+            // 絞り込み中は区切り線を隠す（検索結果としては意味がないため）
+            if (item.IsSeparator)
+            {
+                return false;
+            }
+
+            return item.Name.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
+                || item.Text.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
+                || item.Category.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase);
+        }
+
+        private void OnItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.OldItems is not null)
+            {
+                foreach (object old in e.OldItems)
+                {
+                    if (old is ClipItem item)
+                    {
+                        item.PropertyChanged -= OnAnyItemPropertyChanged;
+                    }
+                }
+            }
+
+            if (e.NewItems is not null)
+            {
+                foreach (object added in e.NewItems)
+                {
+                    if (added is ClipItem item)
+                    {
+                        item.PropertyChanged += OnAnyItemPropertyChanged;
+                    }
+                }
+            }
+
+            IsDirty = true;
+            OnPropertyChanged(nameof(StatusText));
+        }
+
+        private void OnAnyItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            switch (e.PropertyName)
+            {
+                case nameof(ClipItem.Name):
+                case nameof(ClipItem.Text):
+                case nameof(ClipItem.Category):
+                case nameof(ClipItem.IsSeparator):
+                case nameof(ClipItem.SequenceValue):
+                case nameof(ClipItem.SequenceStep):
+                    IsDirty = true;
+                    break;
+            }
+
+            if (e.PropertyName == nameof(ClipItem.Category))
+            {
+                RefreshCategories();
+            }
+        }
+
+        private void OnSelectedItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            switch (e.PropertyName)
+            {
+                case nameof(ClipItem.Text):
+                    OnPropertyChanged(nameof(Preview));
+                    OnPropertyChanged(nameof(IsSequenceVisible));
+                    break;
+
+                case nameof(ClipItem.SequenceValue):
+                case nameof(ClipItem.SequenceStep):
+                    OnPropertyChanged(nameof(Preview));
+                    break;
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        protected void OnPropertyChanged([CallerMemberName] string? name = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+}

@@ -1,0 +1,59 @@
+<!--
+    ライトテーマの色定義。
+    キーの一覧は Dark.xaml と必ず一致させる（ThemeManager が丸ごと入れ替えるため）。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 面 -->
+    <SolidColorBrush x:Key="Brush.Window.Bg" Color="#FFF3F3F3" />
+    <SolidColorBrush x:Key="Brush.Surface" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="Brush.Surface.Alt" Color="#FFF8F8F8" />
+
+    <!-- 枠線 -->
+    <SolidColorBrush x:Key="Brush.Border" Color="#FFE3E3E3" />
+    <SolidColorBrush x:Key="Brush.Border.Strong" Color="#FFC9C9C9" />
+
+    <!-- 文字 -->
+    <SolidColorBrush x:Key="Brush.Text" Color="#FF1B1B1B" />
+    <SolidColorBrush x:Key="Brush.Text.Secondary" Color="#FF6B6B6B" />
+    <SolidColorBrush x:Key="Brush.Text.Disabled" Color="#FFA3A3A3" />
+
+    <!-- 状態 -->
+    <SolidColorBrush x:Key="Brush.Hover" Color="#FFEDEDED" />
+    <SolidColorBrush x:Key="Brush.Pressed" Color="#FFE1E1E1" />
+    <SolidColorBrush x:Key="Brush.Selected" Color="#FFE8F0FB" />
+
+    <!-- コントロール -->
+    <SolidColorBrush x:Key="Brush.Control.Bg" Color="#FFFDFDFD" />
+    <SolidColorBrush x:Key="Brush.Control.Hover" Color="#FFF2F2F2" />
+    <SolidColorBrush x:Key="Brush.Control.Pressed" Color="#FFE6E6E6" />
+    <SolidColorBrush x:Key="Brush.Input.Bg" Color="#FFFFFFFF" />
+
+    <!-- バッジ -->
+    <SolidColorBrush x:Key="Brush.Badge.Bg" Color="#FFECECEC" />
+    <SolidColorBrush x:Key="Brush.Badge.Text" Color="#FF585858" />
+
+    <!-- 連番のカード -->
+    <SolidColorBrush x:Key="Brush.Seq.Bg" Color="#FFFBF4DF" />
+    <SolidColorBrush x:Key="Brush.Seq.Border" Color="#FFE7D9A8" />
+    <SolidColorBrush x:Key="Brush.Seq.Text" Color="#FF6B5F42" />
+
+    <!-- プレビュー -->
+    <SolidColorBrush x:Key="Brush.Preview.Bg" Color="#FFF5F8FC" />
+    <SolidColorBrush x:Key="Brush.Preview.Text" Color="#FF1F3355" />
+
+    <!-- その他 -->
+    <SolidColorBrush x:Key="Brush.Separator" Color="#FFD6D6D6" />
+    <SolidColorBrush x:Key="Brush.ScrollThumb" Color="#FFC3C3C3" />
+    <SolidColorBrush x:Key="Brush.ScrollThumb.Hover" Color="#FF9E9E9E" />
+    <SolidColorBrush x:Key="Brush.Toast.Bg" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="Brush.Toast.Border" Color="#FFD8D8D8" />
+
+    <!-- アクセント（ThemeManager が Windows のアクセント色で上書きする） -->
+    <SolidColorBrush x:Key="Brush.Accent" Color="#FF0F6CBD" />
+    <SolidColorBrush x:Key="Brush.Accent.Hover" Color="#FF0D5FA6" />
+    <SolidColorBrush x:Key="Brush.Accent.Pressed" Color="#FF0B518E" />
+    <SolidColorBrush x:Key="Brush.OnAccent" Color="#FFFFFFFF" />
+
+</ResourceDictionary>
