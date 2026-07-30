@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
+    MyTaskTray アプリアイコン（マスター）
+    ・墨色の角丸タイル + 白のカギ括弧「」
+    ・「あらかじめ用意された言葉」を、道具ではなく言葉そのもので表す
+    ・中央の余白は「これから入る文」を意味するので、要素を足さないこと
+    ・16/20/24/32px はこの SVG の縮小ではなくピクセル指定で描く（tools/make-icon.py）
+  -->
+  <defs>
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="34" y1="22" x2="222" y2="234">
+      <stop offset="0" stop-color="#333C4B"/>
+      <stop offset="0.52" stop-color="#1A212C"/>
+      <stop offset="1" stop-color="#0C1017"/>
+    </linearGradient>
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse" x1="128" y1="16" x2="128" y2="152">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="128" y1="50" x2="128" y2="206">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E3E9F2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#tile)"/>
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#sheen)"/>
+  <rect x="17.5" y="17.5" width="221" height="221" rx="54.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="3"/>
+
+  <!-- 「 」 : 点対称（中心 128,128）。片方を動かしたら必ずもう片方も動かす -->
+  <g fill="none" stroke="url(#ink)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 62 H74 V132"/>
+    <path d="M128 194 H182 V124"/>
+  </g>
+</svg>

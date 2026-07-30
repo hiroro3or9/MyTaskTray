@@ -488,7 +488,11 @@ namespace MyTaskTray
                 if (info?.Stream is not null)
                 {
                     using Stream stream = info.Stream;
-                    return new Icon(stream);
+
+                    // app.ico は 16/20/24/32px をピクセル単位で描き分けている。
+                    // サイズを渡さないと 32px が選ばれて NotifyIcon 側で縮小され、線がにじむ。
+                    // SmallIconSize は DPI に追従するので、そのまま最適なフレームが選ばれる。
+                    return new Icon(stream, SystemInformation.SmallIconSize);
                 }
             }
             catch (Exception)

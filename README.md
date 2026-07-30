@@ -229,6 +229,22 @@ Services/ThemeManager.cs    Windows の外観設定への追従
 Services/TrayMenuTheme.cs   トレイメニューのダークテーマ描画
 ViewModels/SettingsViewModel.cs 設定画面のビューモデル
 ViewModels/PlaceholderRow.cs    差し込み一覧の 1 行
+Resources/app-icon.svg      アイコンのマスター（256px 用）
+Resources/app.ico           アプリ / トレイアイコン（16〜256px の 8 サイズ）
+tools/make-icon.py          app-icon.svg から app.ico を生成する
+```
+
+### アイコン
+
+墨色のタイルに白のカギ括弧「」を置いています。「あらかじめ用意された言葉」を道具ではなく言葉そのもので表す意図なので、
+**中央の余白には何も足さない**でください。
+
+16 / 20 / 24 / 32px は SVG の縮小ではなく `tools/make-icon.py` の中でピクセル単位に描き分けています
+（縮小すると 2px の線が半端な位置に乗ってにじむため）。デザインを変えたら次を実行して `Resources/app.ico` を作り直します。
+
+```
+pip install cairosvg pillow
+python tools/make-icon.py Resources/app-icon.svg Resources/app.ico
 ```
 
 ## 動作環境
