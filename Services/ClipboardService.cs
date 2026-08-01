@@ -3,7 +3,7 @@ using System.Threading;
 namespace MyTaskTray.Services
 {
     /// <summary>
-    /// クリップボードへのコピーを行う。
+    /// クリップボードの読み書きを行う。
     /// 他プロセスがクリップボードをロックしている場合があるため、失敗時は少し待って再試行する。
     /// </summary>
     public static class ClipboardService
@@ -21,6 +21,26 @@ namespace MyTaskTray.Services
             }
 
             return TryRun(() => System.Windows.Clipboard.SetText(text));
+        }
+
+        /// <summary>
+        /// クリップボードの文字列を読み取る。
+        /// 文字列が入っていない場合や読み取れなかった場合は空文字列を返す。
+        /// <c>{clip}</c> の差し込みで使う。
+        /// </summary>
+        public static string GetText()
+        {
+            string result = string.Empty;
+
+            TryRun(() =>
+            {
+                if (System.Windows.Clipboard.ContainsText())
+                {
+                    result = System.Windows.Clipboard.GetText() ?? string.Empty;
+                }
+            });
+
+            return result;
         }
 
         private static bool TryRun(Action action)

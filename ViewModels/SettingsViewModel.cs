@@ -200,7 +200,8 @@ namespace MyTaskTray.ViewModels
                     return string.Empty;
                 }
 
-                return TemplateEngine.Expand(SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue);
+                return TemplateEngine.Expand(
+                    SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue, ClipboardService.GetText);
             }
         }
 
@@ -213,10 +214,13 @@ namespace MyTaskTray.ViewModels
             DateTime now = DateTime.Now;
             int sequence = SelectedItem?.SequenceValue ?? 1;
 
+            // クリップボードの読み取りは一覧全体で 1 回で済ませる
+            string clipboard = ClipboardService.GetText();
+
             foreach (PlaceholderRow row in Placeholders)
             {
                 row.Sample = TemplateEngine.ToSingleLine(
-                    TemplateEngine.Expand(row.Token, now, sequence), 60);
+                    TemplateEngine.Expand(row.Token, now, sequence, () => clipboard), 60);
             }
         }
 

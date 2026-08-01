@@ -17,6 +17,8 @@ namespace MyTaskTray.Services
     ///   例) {date}  {date:yyyyMMdd}  {date+1}  {date-1w:M月d日}  {seq:0000}  {seq+1}  {guid}
     /// 計算式: <c>{calc:式[|書式]}</c>（<c>{=式}</c> と書いてもよい）
     ///   例) {calc:(1000+200)*1.1}  {calc:1000*8%|#,##0}  {calc:{seq}*100}
+    /// クリップボード: <c>{clip[:書式]}</c>
+    ///   例) {clip}  {clip:digits}  {clip:/ID-(\d+)/}
     /// <c>{{</c> と <c>}}</c> はそれぞれ <c>{</c> <c>}</c> のエスケープ。
     /// 解釈できない差し込み（未知の名前・単位・書式、オフセットを付けられない差し込みなど）は、
     /// 書いたままの文字列を残してユーザーが誤りに気付けるようにする。
@@ -30,6 +32,12 @@ namespace MyTaskTray.Services
         /// <summary>計算式の中の差し込みを展開する際の入れ子の上限。</summary>
         private const int MaxDepth = 8;
 
+        /// <summary>
+        /// <c>{clip:…}</c> に書かれた正規表現の実行時間の上限。
+        /// 利用者が自由に書けるため、組み合わせによっては照合が終わらなくなることがある。
+        /// </summary>
+        private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(200);
+
         // 名前 + 任意のオフセット + 任意の書式。
         // GeneratedRegex はコンパイル時に実装を生成するため、RegexOptions.Compiled は不要。
         [GeneratedRegex(
@@ -40,6 +48,12 @@ namespace MyTaskTray.Services
         /// <summary>設定画面の「差し込みを挿入」で提示する一覧（並び順がパネルの表示順になる）。</summary>
         public static IReadOnlyList<PlaceholderInfo> Placeholders { get; } =
         [
+            new("{clip}", "クリップボード", "いまコピーしてある文字列（前後の空白は取り除く）"),
+            new("{clip:digits}", "クリップボード", "コピー済みの文字列から最初の数字だけを取り出す"),
+            new("{clip:/ID-(\\d+)/}", "クリップボード", "正規表現で取り出す（かっこがあればその中身）"),
+            new("{clip:line}", "クリップボード", "1 行目だけを取り出す"),
+            new("{clip:upper}", "クリップボード", "大文字にする（lower で小文字）"),
+            new("{clip:raw}", "クリップボード", "空白や改行も含めてそのまま"),
             new("{date}", "日付", "今日の日付"),
             new("{date:yyyyMMdd}", "日付", "書式を指定した日付"),
             new("{date:yyyy年M月d日}", "日付", "和文の日付"),
@@ -78,9 +92,36 @@ namespace MyTaskTray.Services
             new("{{", "連番・その他", "波かっこ { そのもの（}} なら }）"),
         ];
 
+        /// <summary>
+        /// 1 回の展開のあいだ持ち回る値。
+        /// クリップボードの読み取りは <c>{clip}</c> が実際に現れたときだけ行い、
+        /// 同じ展開の中では何度使っても同じ値になるように覚えておく。
+        /// </summary>
+        private sealed class ExpandContext(DateTime now, int sequenceValue, Func<string>? clipboard)
+        {
+            private string? _clipboard;
+
+            public DateTime Now { get; } = now;
+
+            public int SequenceValue { get; } = sequenceValue;
+
+            /// <summary>呼び出し元がクリップボードの読み取り手段を渡しているかどうか。</summary>
+            public bool HasClipboard { get; } = clipboard is not null;
+
+            public string Clipboard => _clipboard ??= clipboard?.Invoke() ?? string.Empty;
+        }
+
         /// <summary>差し込みを展開した文字列を返す。</summary>
         public static string Expand(string template, DateTime now, int sequenceValue)
-            => Expand(template, now, sequenceValue, 0, false);
+            => Expand(template, now, sequenceValue, null);
+
+        /// <summary>差し込みを展開した文字列を返す。</summary>
+        /// <param name="clipboard">
+        /// <c>{clip}</c> が現れたときに呼ばれ、クリップボードの文字列を返す関数。
+        /// null の場合、<c>{clip}</c> は書いたままの文字列として残す。
+        /// </param>
+        public static string Expand(string template, DateTime now, int sequenceValue, Func<string>? clipboard)
+            => Expand(template, new ExpandContext(now, sequenceValue, clipboard), 0, false);
 
         /// <summary>
         /// 差し込みを展開する。計算式は中に別の差し込みを書けるため、
@@ -91,7 +132,7 @@ namespace MyTaskTray.Services
         /// 数値にならない差し込み（<c>{date}</c> など）は誤った計算結果になるため、
         /// このとき展開結果が数値かどうかを確かめ、数値でなければ例外にする。
         /// </param>
-        private static string Expand(string template, DateTime now, int sequenceValue, int depth, bool numericOnly)
+        private static string Expand(string template, ExpandContext context, int depth, bool numericOnly)
         {
             if (string.IsNullOrEmpty(template))
             {
@@ -131,7 +172,7 @@ namespace MyTaskTray.Services
 
                     string inner = template[(i + 1)..close];
                     string token = template[i..(close + 1)];
-                    string expanded = ExpandToken(inner, token, now, sequenceValue, depth);
+                    string expanded = ExpandToken(inner, token, context, depth);
 
                     // 式の中で {date} のような文字列の差し込みを使うと
                     // 2026/07/30 が「2026 ÷ 7 ÷ 30」として計算されてしまうため、ここで弾く
@@ -190,9 +231,18 @@ namespace MyTaskTray.Services
         /// 連番の差し込みを含むかどうか。含む場合、コピー後にカウンターを進める。
         /// <c>{{seq}}</c> のようにエスケープした場合はリテラルの文字列になるため、含まないと判定する。
         /// </summary>
-        public static bool ContainsSequence(string template) => ContainsSequence(template, 0);
+        public static bool ContainsSequence(string template) => ContainsToken(template, "seq", 0);
 
-        private static bool ContainsSequence(string template, int depth)
+        /// <summary>
+        /// クリップボードの差し込みを含むかどうか。
+        /// 含む場合だけクリップボードを読みに行き、空のときに注意を促す。
+        /// </summary>
+        public static bool ContainsClipboard(string template) => ContainsToken(template, "clip", 0);
+
+        /// <summary>
+        /// 指定した名前の差し込みを含むかどうか。計算式の中に書かれている場合も含むと判定する。
+        /// </summary>
+        private static bool ContainsToken(string template, string name, int depth)
         {
             if (string.IsNullOrEmpty(template) || depth > MaxDepth)
             {
@@ -228,7 +278,7 @@ namespace MyTaskTray.Services
                 string inner = template[(i + 1)..close];
 
                 // {seq} 自身か、{calc:{seq}*100} のように式の中で使われている場合
-                if (IsSequenceToken(inner) || ContainsSequence(inner, depth + 1))
+                if (IsToken(inner, name) || ContainsToken(inner, name, depth + 1))
                 {
                     return true;
                 }
@@ -239,26 +289,26 @@ namespace MyTaskTray.Services
             return false;
         }
 
-        /// <summary>差し込みの中身が <c>{seq}</c> かどうか（書式やオフセット付きも含む）。</summary>
-        private static bool IsSequenceToken(string inner)
+        /// <summary>差し込みの中身が指定した名前かどうか（書式やオフセット付きも含む）。</summary>
+        private static bool IsToken(string inner, string name)
         {
             Match m = InnerRegex().Match(inner.Trim());
-            return m.Success && m.Groups["name"].Value.Equals("seq", StringComparison.OrdinalIgnoreCase);
+            return m.Success && m.Groups["name"].Value.Equals(name, StringComparison.OrdinalIgnoreCase);
         }
 
-        private static string ExpandToken(string inner, string original, DateTime now, int sequenceValue, int depth)
+        private static string ExpandToken(string inner, string original, ExpandContext context, int depth)
         {
             string trimmed = inner.Trim();
 
             // 計算式は式の中に差し込みを書けるので、名前の解析より先に振り分ける
             if (trimmed.StartsWith('='))
             {
-                return ExpandCalc(trimmed[1..], original, now, sequenceValue, depth);
+                return ExpandCalc(trimmed[1..], original, context, depth);
             }
 
             if (trimmed.StartsWith("calc:", StringComparison.OrdinalIgnoreCase))
             {
-                return ExpandCalc(trimmed[5..], original, now, sequenceValue, depth);
+                return ExpandCalc(trimmed[5..], original, context, depth);
             }
 
             Match m = InnerRegex().Match(trimmed);
@@ -267,6 +317,8 @@ namespace MyTaskTray.Services
                 return original;
             }
 
+            DateTime now = context.Now;
+            int sequenceValue = context.SequenceValue;
             string name = m.Groups["name"].Value.ToLowerInvariant();
             string format = m.Groups["fmt"].Success ? m.Groups["fmt"].Value : string.Empty;
 
@@ -322,6 +374,18 @@ namespace MyTaskTray.Services
                         }
 
                         return FormatSequence(unchecked(sequenceValue + offset), format);
+
+                    case "clip":
+                        RejectOffset(name, hasOffset);
+
+                        // 呼び出し元がクリップボードを読めない場面（テストなど）では
+                        // 中途半端な文字列を返さず、書いたままを残す
+                        if (!context.HasClipboard)
+                        {
+                            return original;
+                        }
+
+                        return FormatClipboard(context.Clipboard, format, original);
 
                     case "guid":
                         RejectOffset(name, hasOffset);
@@ -380,7 +444,7 @@ namespace MyTaskTray.Services
         /// <summary>
         /// <c>{calc:式[|書式]}</c> を評価する。式の中の差し込みを先に展開してから計算する。
         /// </summary>
-        private static string ExpandCalc(string body, string original, DateTime now, int sequenceValue, int depth)
+        private static string ExpandCalc(string body, string original, ExpandContext context, int depth)
         {
             (string expression, string format) = SplitCalcFormat(body);
 
@@ -388,7 +452,7 @@ namespace MyTaskTray.Services
             {
                 // {seq} や {daysuntil:…} を式の中で使えるようにする。
                 // 数値にならない差し込みが混ざっていた場合はここで例外になる。
-                string resolved = Expand(expression, now, sequenceValue, depth + 1, true);
+                string resolved = Expand(expression, context, depth + 1, true);
                 return ExpressionEvaluator.Format(ExpressionEvaluator.Evaluate(resolved), format);
             }
             catch (Exception)
@@ -439,6 +503,85 @@ namespace MyTaskTray.Services
             }
 
             return (body, string.Empty);
+        }
+
+        /// <summary>
+        /// クリップボードの文字列を書式にしたがって整える。
+        /// 書式が既知のキーワードでなければ正規表現として扱い、一致した部分を取り出す。
+        /// （<c>/…/</c> のようにスラッシュで囲んでもよい）
+        /// 取り出せなかった場合は、書いたままを残してユーザーが気付けるようにする。
+        /// </summary>
+        private static string FormatClipboard(string value, string format, string original)
+        {
+            string spec = format.Trim();
+
+            switch (spec.ToLowerInvariant())
+            {
+                case "":
+                case "trim":
+                    return value.Trim();
+
+                case "raw":
+                    return value;
+
+                case "digits":
+                    return ExtractByRegex(value, @"\d+", original);
+
+                case "upper":
+                    return value.Trim().ToUpperInvariant();
+
+                case "lower":
+                    return value.Trim().ToLowerInvariant();
+
+                case "line":
+                case "line1":
+                    return FirstLine(value);
+            }
+
+            // スラッシュで囲まれていれば、その中身を正規表現として扱う
+            if (spec.Length >= 2 && spec[0] == '/' && spec[^1] == '/')
+            {
+                spec = spec[1..^1];
+            }
+
+            return ExtractByRegex(value, spec, original);
+        }
+
+        /// <summary>
+        /// 正規表現に最初に一致した部分を返す。
+        /// かっこ（キャプチャ）が書かれていればその中身を返すため、
+        /// <c>ID-(\d+)</c> のように「目印＋取り出したい部分」と書ける。
+        /// </summary>
+        private static string ExtractByRegex(string value, string pattern, string original)
+        {
+            if (string.IsNullOrEmpty(pattern))
+            {
+                return original;
+            }
+
+            try
+            {
+                Match m = Regex.Match(value, pattern, RegexOptions.CultureInvariant, RegexTimeout);
+
+                if (!m.Success)
+                {
+                    return original;
+                }
+
+                return m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value;
+            }
+            catch (Exception)
+            {
+                // 正規表現が誤っている、または照合が長引いて打ち切られた場合
+                return original;
+            }
+        }
+
+        /// <summary>最初の行を返す（前後の空白は取り除く）。</summary>
+        private static string FirstLine(string value)
+        {
+            int end = value.IndexOfAny(['\r', '\n']);
+            return (end < 0 ? value : value[..end]).Trim();
         }
 
         private static string FormatNumber(int value, string format)

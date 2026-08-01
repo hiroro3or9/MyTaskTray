@@ -156,7 +156,7 @@ namespace MyTaskTray
             menu.Items.Add(exitItem);
 
             // 表示するたびに、差し込みを展開したツールチップを作り直す
-            menu.Opening += (_, _) => RefreshToolTips(menu.Items);
+            menu.Opening += (_, _) => RefreshToolTips(menu.Items, CreateClipboardReader());
 
             // ダークテーマのときだけ、メニューの色を合わせる
             TrayMenuTheme.Apply(menu);
@@ -230,12 +230,13 @@ namespace MyTaskTray
             }
 
             Dictionary<string, ToolStripMenuItem> categories = new(StringComparer.Ordinal);
+            Func<string> clipboard = CreateClipboardReader();
 
             foreach (ClipItem item in _settings.Items)
             {
                 ToolStripItem entry = item.IsSeparator
                     ? new ToolStripSeparator()
-                    : CreateClipMenuItem(item);
+                    : CreateClipMenuItem(item, clipboard);
 
                 // 「日付」と「日付 」（末尾に空白）が別のサブメニューになってしまわないよう、
                 // 見た目で区別できない前後の空白は無視して同じカテゴリとして扱う
@@ -275,7 +276,17 @@ namespace MyTaskTray
             }
         }
 
-        private ToolStripMenuItem CreateClipMenuItem(ClipItem item)
+        /// <summary>
+        /// クリップボードを 1 度だけ読み、以降は同じ値を返す関数を作る。
+        /// メニューを開くたびに項目の数だけ読みに行くと、他アプリのコピー操作を妨げてしまう。
+        /// </summary>
+        private static Func<string> CreateClipboardReader()
+        {
+            string? cached = null;
+            return () => cached ??= ClipboardService.GetText();
+        }
+
+        private ToolStripMenuItem CreateClipMenuItem(ClipItem item, Func<string> clipboard)
         {
             string label = string.IsNullOrWhiteSpace(item.Name) ? item.Text : item.Name;
 
@@ -287,15 +298,15 @@ namespace MyTaskTray
 
             ToolStripMenuItem menuItem = new(EscapeAmpersand(Truncate(label, MenuTextMaxLength)))
             {
-                ToolTipText = BuildToolTip(item),
+                ToolTipText = BuildToolTip(item, clipboard),
                 Tag = item,
             };
             menuItem.Click += (_, _) => CopyToClipboard(item);
             return menuItem;
         }
 
-        /// <summary>メニュー配下のツールチップを、現在時刻で展開し直す。</summary>
-        private static void RefreshToolTips(ToolStripItemCollection items)
+        /// <summary>メニュー配下のツールチップを、現在時刻とクリップボードの内容で展開し直す。</summary>
+        private static void RefreshToolTips(ToolStripItemCollection items, Func<string> clipboard)
         {
             foreach (ToolStripItem item in items)
             {
@@ -306,21 +317,22 @@ namespace MyTaskTray
 
                 if (menuItem.Tag is ClipItem clip)
                 {
-                    menuItem.ToolTipText = BuildToolTip(clip);
+                    menuItem.ToolTipText = BuildToolTip(clip, clipboard);
                 }
 
                 if (menuItem.HasDropDownItems)
                 {
-                    RefreshToolTips(menuItem.DropDownItems);
+                    RefreshToolTips(menuItem.DropDownItems, clipboard);
                 }
             }
         }
 
         /// <summary>差し込みを含む場合は、展開後の値もツールチップに出す。</summary>
-        private static string BuildToolTip(ClipItem item)
+        private static string BuildToolTip(ClipItem item, Func<string> clipboard)
         {
             string raw = Truncate(item.Text, 200);
-            string expanded = TemplateEngine.Expand(item.Text, DateTime.Now, item.SequenceValue);
+            string expanded = TemplateEngine.Expand(
+                item.Text, DateTime.Now, item.SequenceValue, clipboard);
 
             if (string.Equals(raw, Truncate(expanded, 200), StringComparison.Ordinal))
             {
@@ -332,7 +344,21 @@ namespace MyTaskTray
 
         private void CopyToClipboard(ClipItem item)
         {
-            string value = TemplateEngine.Expand(item.Text, DateTime.Now, item.SequenceValue);
+            // {clip} はコピーで上書きされる前の内容を読む必要があるため、先に読み取っておく
+            string clipboard = ClipboardService.GetText();
+
+            // {clip} を使う項目でクリップボードが空だと、差し込む先が抜けた文字列になってしまう。
+            // 気付かずに貼り付けてしまわないよう、コピーせずに知らせる
+            if (string.IsNullOrWhiteSpace(clipboard) && TemplateEngine.ContainsClipboard(item.Text))
+            {
+                ToastWindow.ShowToast(
+                    "クリップボードが空です",
+                    "差し込む値をコピーしてから、もう一度この項目を選んでください");
+                return;
+            }
+
+            string value = TemplateEngine.Expand(
+                item.Text, DateTime.Now, item.SequenceValue, () => clipboard);
 
             if (!ClipboardService.TryCopy(value))
             {
