@@ -47,21 +47,62 @@ namespace MyTaskTray
             _placeholderView.Filter += OnPlaceholderFilter;
             PlaceholderList.ItemsSource = _placeholderView.View;
 
-            // {time} などがあるため、プレビューを 1 秒ごとに追従させる
+            // {time} などを含む項目を選んでいる間だけ、プレビューを 1 秒ごとに追従させる
             _previewTimer = new DispatcherTimer(DispatcherPriority.Background)
             {
                 Interval = TimeSpan.FromSeconds(1),
             };
             _previewTimer.Tick += (_, _) => _vm.RefreshPreview();
-            _previewTimer.Start();
+            _vm.PropertyChanged += OnViewModelPropertyChanged;
+            UpdatePreviewTimer();
 
-            Closed += (_, _) => _previewTimer.Stop();
+            // 他アプリでコピーしてから戻ってきた場合に、{clip} のプレビューを追従させる。
+            // プレビューのたびに読むと入力 1 文字ごとにクリップボードを開いてしまうため、ここでだけ読む
+            Activated += (_, _) => _vm.RefreshClipboard();
+
+            Closed += (_, _) =>
+            {
+                _previewTimer.Stop();
+                _vm.PropertyChanged -= OnViewModelPropertyChanged;
+            };
 
             ThemeManager.Attach(this);
         }
 
         /// <summary>保存して閉じた場合に true。</summary>
         public bool Saved { get; private set; }
+
+        private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.NeedsPreviewRefresh))
+            {
+                UpdatePreviewTimer();
+            }
+        }
+
+        /// <summary>
+        /// 選択項目が時間で変わる差し込みを含むときだけタイマーを回す。
+        /// 常に回すと <c>{guid}</c> や <c>{random}</c> のプレビューが毎秒書き換わってしまう。
+        /// </summary>
+        private void UpdatePreviewTimer()
+        {
+            bool needed = _vm.NeedsPreviewRefresh;
+
+            // Start() は動作中に呼ぶと間隔が測り直しになるため、状態が変わるときだけ操作する
+            if (needed == _previewTimer.IsEnabled)
+            {
+                return;
+            }
+
+            if (needed)
+            {
+                _previewTimer.Start();
+            }
+            else
+            {
+                _previewTimer.Stop();
+            }
+        }
 
         // ==================================================================
         // 一覧の操作
@@ -108,7 +149,7 @@ namespace MyTaskTray
             }
 
             ClipItem copy = _vm.SelectedItem.Clone();
-            copy.Id = Guid.NewGuid().ToString("N");
+            copy.Id = ClipItem.NewId();
             if (!copy.IsSeparator)
             {
                 copy.Name = string.IsNullOrWhiteSpace(copy.Name) ? copy.Name : copy.Name + " のコピー";
@@ -572,27 +613,14 @@ namespace MyTaskTray
 
         private bool TrySave()
         {
+            // 画面の項目そのものを整えてから写す。
+            // 写したあとで整えると、保存した内容と画面の表示が食い違ったままになる
+            NormalizeItems();
+
             AppSettings settings = _vm.ToSettings();
 
             // 設定画面を開いている間にトレイからコピーされて進んだ連番を取り込む
             AdoptExternalSequenceValues(settings);
-
-            foreach (ClipItem item in settings.Items)
-            {
-                // 表示名が空の項目はコピー文字列を名前として使う
-                if (!item.IsSeparator && string.IsNullOrWhiteSpace(item.Name))
-                {
-                    item.Name = item.Text.Trim();
-                }
-
-                // 見た目で区別できない前後の空白でカテゴリが分かれないようにする
-                item.Category = item.Category.Trim();
-
-                if (item.SequenceStep == 0)
-                {
-                    item.SequenceStep = 1;
-                }
-            }
 
             try
             {
@@ -613,6 +641,36 @@ namespace MyTaskTray
         }
 
         /// <summary>
+        /// 保存前に項目の内容を整える。画面に見えている項目そのものを直すため、
+        /// 保存したあとも表示とファイルの内容が一致する。
+        /// </summary>
+        private void NormalizeItems()
+        {
+            foreach (ClipItem item in _vm.Items)
+            {
+                // 表示名が空の項目はコピー文字列を名前として使う
+                if (!item.IsSeparator && string.IsNullOrWhiteSpace(item.Name))
+                {
+                    item.Name = item.Text.Trim();
+                }
+
+                // 見た目で区別できない前後の空白でカテゴリが分かれないようにする
+                item.Category = item.Category.Trim();
+
+                if (item.SequenceStep == 0)
+                {
+                    item.SequenceStep = 1;
+                }
+
+                // 画面で追加した項目にはまだ Id が無い。連番の引き継ぎに使うため採番しておく
+                if (string.IsNullOrEmpty(item.Id))
+                {
+                    item.Id = ClipItem.NewId();
+                }
+            }
+        }
+
+        /// <summary>
         /// 設定画面は開いた時点の内容を編集しているため、そのまま保存すると
         /// 開いている間にトレイからコピーされて進んだ連番を巻き戻してしまう。
         /// <see cref="ClipItem.Id"/> で突き合わせ、ファイル側の新しい連番を取り込む。
@@ -628,6 +686,12 @@ namespace MyTaskTray
             catch (Exception)
             {
                 // 読み直せない場合は画面の内容をそのまま保存する
+                return;
+            }
+
+            // 読めずに既定値が返ってきた場合、取り込むと連番が既定値に戻ってしまう
+            if (latest.IsFallback)
+            {
                 return;
             }
 
@@ -656,7 +720,9 @@ namespace MyTaskTray
 
         private void OnWindowClosing(object sender, CancelEventArgs e)
         {
-            if (Saved || !_vm.IsDirty)
+            // 保存が成功すると MarkSaved() で IsDirty が false になるため、これだけで足りる。
+            // Saved を条件に足すと、保存後にさらに編集した内容を確認なしで捨ててしまう
+            if (!_vm.IsDirty)
             {
                 return;
             }
@@ -688,6 +754,18 @@ namespace MyTaskTray
 
         private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
         {
+            // ポップアップが開いているあいだの Esc は、ウィンドウではなくポップアップを閉じる。
+            // カテゴリ候補はフォーカスがポップアップの外（▾ ボタン）に残るため、
+            // ポップアップ側の PreviewKeyDown には届かず、
+            // ここで拾わないと IsCancel のキャンセルボタンが反応して設定画面ごと閉じてしまう。
+            if (e.Key == Key.Escape && (InsertPopup.IsOpen || CategoryPopup.IsOpen))
+            {
+                InsertPopup.IsOpen = false;
+                CategoryPopup.IsOpen = false;
+                e.Handled = true;
+                return;
+            }
+
             // Alt + ↑ / ↓ で並べ替え。
             // 文字入力中は一覧から目が離れており、気付かないまま並びが変わってしまうため無効にする。
             if (e.Key == Key.System && (e.SystemKey == Key.Up || e.SystemKey == Key.Down))

@@ -45,6 +45,12 @@ namespace MyTaskTray.Services
             RegexOptions.CultureInvariant)]
         private static partial Regex InnerRegex();
 
+        // {random:1-6} の範囲。{random:-5-5} や {random:-10--5} のように下限が負でも読めるようにする。
+        [GeneratedRegex(
+            @"^\s*(?<min>-?\d+)\s*-\s*(?<max>-?\d+)\s*$",
+            RegexOptions.CultureInvariant)]
+        private static partial Regex RandomRangeRegex();
+
         /// <summary>設定画面の「差し込みを挿入」で提示する一覧（並び順がパネルの表示順になる）。</summary>
         public static IReadOnlyList<PlaceholderInfo> Placeholders { get; } =
         [
@@ -63,6 +69,9 @@ namespace MyTaskTray.Services
             new("{time:HH:mm:ss}", "時刻", "秒まで含む時刻"),
             new("{time+30}", "時刻", "30分後（単位 h 時 / mi 分 / s 秒）"),
             new("{datetime}", "時刻", "日付と時刻"),
+            new("{hour}", "時刻", "現在の時（0〜23。{hour:00} で 2 桁）"),
+            new("{minute}", "時刻", "現在の分（0〜59）"),
+            new("{second}", "時刻", "現在の秒（0〜59）"),
             new("{monthstart}", "月・週", "今月の初日（+1 で翌月）"),
             new("{monthend}", "月・週", "今月の末日（+1 で翌月）"),
             new("{weekstart}", "月・週", "今週の月曜日（+1 で翌週）"),
@@ -88,7 +97,7 @@ namespace MyTaskTray.Services
             new("{guid}", "連番・その他", "GUID（小文字・ハイフンあり）"),
             new("{guid:N}", "連番・その他", "GUID（ハイフンなし / B 波かっこ / U 大文字）"),
             new("{random}", "連番・その他", "1〜100 の乱数"),
-            new("{random:1-6}", "連番・その他", "範囲を指定した乱数"),
+            new("{random:1-6}", "連番・その他", "範囲を指定した乱数（下限は負でもよい）"),
             new("{{", "連番・その他", "波かっこ { そのもの（}} なら }）"),
         ];
 
@@ -231,18 +240,39 @@ namespace MyTaskTray.Services
         /// 連番の差し込みを含むかどうか。含む場合、コピー後にカウンターを進める。
         /// <c>{{seq}}</c> のようにエスケープした場合はリテラルの文字列になるため、含まないと判定する。
         /// </summary>
-        public static bool ContainsSequence(string template) => ContainsToken(template, "seq", 0);
+        public static bool ContainsSequence(string template) => ContainsToken(template, IsSequenceName, 0);
 
         /// <summary>
         /// クリップボードの差し込みを含むかどうか。
         /// 含む場合だけクリップボードを読みに行き、空のときに注意を促す。
         /// </summary>
-        public static bool ContainsClipboard(string template) => ContainsToken(template, "clip", 0);
+        public static bool ContainsClipboard(string template) => ContainsToken(template, IsClipboardName, 0);
 
         /// <summary>
-        /// 指定した名前の差し込みを含むかどうか。計算式の中に書かれている場合も含むと判定する。
+        /// 秒〜分の単位で結果が変わる差し込み（<c>{time}</c> など）を含むかどうか。
+        /// プレビューを一定間隔で更新し続ける必要があるかの判定に使う。
+        /// <c>{guid}</c> や <c>{random}</c> も評価のたびに変わるが、
+        /// 時間の経過で変わるわけではないため含めない（更新するとプレビューがちらつくだけになる）。
         /// </summary>
-        private static bool ContainsToken(string template, string name, int depth)
+        public static bool ContainsTimeSensitive(string template)
+            => ContainsToken(template, IsTimeSensitiveName, 0);
+
+        private static bool IsSequenceName(string name)
+            => name.Equals("seq", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsClipboardName(string name)
+            => name.Equals("clip", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsTimeSensitiveName(string name) => name.ToLowerInvariant() switch
+        {
+            "time" or "datetime" or "now" or "hour" or "minute" or "second" => true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// 条件に合う名前の差し込みを含むかどうか。計算式の中に書かれている場合も含むと判定する。
+        /// </summary>
+        private static bool ContainsToken(string template, Func<string, bool> matchesName, int depth)
         {
             if (string.IsNullOrEmpty(template) || depth > MaxDepth)
             {
@@ -278,7 +308,7 @@ namespace MyTaskTray.Services
                 string inner = template[(i + 1)..close];
 
                 // {seq} 自身か、{calc:{seq}*100} のように式の中で使われている場合
-                if (IsToken(inner, name) || ContainsToken(inner, name, depth + 1))
+                if (IsToken(inner, matchesName) || ContainsToken(inner, matchesName, depth + 1))
                 {
                     return true;
                 }
@@ -289,11 +319,11 @@ namespace MyTaskTray.Services
             return false;
         }
 
-        /// <summary>差し込みの中身が指定した名前かどうか（書式やオフセット付きも含む）。</summary>
-        private static bool IsToken(string inner, string name)
+        /// <summary>差し込みの中身の名前が条件に合うかどうか（書式やオフセット付きも含む）。</summary>
+        private static bool IsToken(string inner, Func<string, bool> matchesName)
         {
             Match m = InnerRegex().Match(inner.Trim());
-            return m.Success && m.Groups["name"].Value.Equals(name, StringComparison.OrdinalIgnoreCase);
+            return m.Success && matchesName(m.Groups["name"].Value);
         }
 
         private static string ExpandToken(string inner, string original, ExpandContext context, int depth)
@@ -428,6 +458,9 @@ namespace MyTaskTray.Services
                         return FormatNumber(DateTime.DaysInMonth(target.Year, target.Month), format);
 
                     case "daysuntil":
+                        // 基準日は書式部分で指定するため、オフセットには意味がない。
+                        // 黙って捨てると誤りに気付けないので、書いたままを残す
+                        RejectOffset(name, hasOffset);
                         return FormatDaysUntil(now, format, original);
 
                     default:
@@ -584,6 +617,10 @@ namespace MyTaskTray.Services
             return (end < 0 ? value : value[..end]).Trim();
         }
 
+        /// <summary>
+        /// 数値の差し込みを整える。書式を指定しない素の数値は地域設定に左右されないよう
+        /// InvariantCulture、書式を指定した場合は桁区切りなどを地域設定に合わせる。
+        /// </summary>
         private static string FormatNumber(int value, string format)
             => string.IsNullOrEmpty(format)
                 ? value.ToString(CultureInfo.InvariantCulture)
@@ -662,10 +699,15 @@ namespace MyTaskTray.Services
             return value.ToString(f, CultureInfo.CurrentCulture);
         }
 
+        /// <summary>
+        /// 連番を書式にしたがって整える。書式を指定しない素の数値は
+        /// 地域設定に左右されないよう InvariantCulture、
+        /// 書式を指定した場合は <see cref="FormatNumber"/> と同じく CurrentCulture で揃える。
+        /// </summary>
         private static string FormatSequence(int value, string format)
             => string.IsNullOrEmpty(format)
                 ? value.ToString(CultureInfo.InvariantCulture)
-                : value.ToString(format, CultureInfo.InvariantCulture);
+                : value.ToString(format, CultureInfo.CurrentCulture);
 
         private static string FormatGuid(string format)
         {
@@ -691,10 +733,12 @@ namespace MyTaskTray.Services
 
             if (!string.IsNullOrEmpty(format))
             {
-                string[] parts = format.Split('-', 2);
-                if (parts.Length != 2
-                    || !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out min)
-                    || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out max))
+                // 単純に '-' で分けると {random:-5-5} のような負の下限を扱えないため、
+                // 「数値 - 数値」の形として読む
+                Match m = RandomRangeRegex().Match(format);
+                if (!m.Success
+                    || !int.TryParse(m.Groups["min"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out min)
+                    || !int.TryParse(m.Groups["max"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out max))
                 {
                     throw new FormatException("乱数の範囲を解釈できません。");
                 }

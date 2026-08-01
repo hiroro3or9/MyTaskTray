@@ -207,6 +207,11 @@ namespace MyTaskTray
         /// <summary>トレイアイコンにマウスを乗せたときの説明。</summary>
         private string BuildIconToolTip()
         {
+            if (_settings.IsFallback)
+            {
+                return ToolTipText + "（設定を読み込めませんでした）";
+            }
+
             int count = _settings.Items.Count(i => !i.IsSeparator);
             return count == 0
                 ? ToolTipText + "（項目がありません）"
@@ -221,7 +226,11 @@ namespace MyTaskTray
         {
             if (_settings.Items.Count == 0)
             {
-                ToolStripMenuItem empty = new("(項目がありません。設定から追加してください)")
+                // 設定ファイルを読めていない場合、「項目がありません」は事実と違ううえ、
+                // 追加して保存すると元の設定を失うため、そうと分かる文言にする
+                ToolStripMenuItem empty = new(_settings.IsFallback
+                    ? "(設定を読み込めませんでした)"
+                    : "(項目がありません。設定から追加してください)")
                 {
                     Enabled = false,
                 };
@@ -344,12 +353,15 @@ namespace MyTaskTray
 
         private void CopyToClipboard(ClipItem item)
         {
-            // {clip} はコピーで上書きされる前の内容を読む必要があるため、先に読み取っておく
-            string clipboard = ClipboardService.GetText();
+            // クリップボードを開くと他アプリのコピー操作を妨げるうえ、ロックされていると
+            // 再試行のあいだ操作が止まる。{clip} を使う項目でだけ読みに行く。
+            // その場合はコピーで上書きされる前の内容が必要なので、展開より先に読む
+            bool usesClipboard = TemplateEngine.ContainsClipboard(item.Text);
+            string clipboard = usesClipboard ? ClipboardService.GetText() : string.Empty;
 
             // {clip} を使う項目でクリップボードが空だと、差し込む先が抜けた文字列になってしまう。
             // 気付かずに貼り付けてしまわないよう、コピーせずに知らせる
-            if (string.IsNullOrWhiteSpace(clipboard) && TemplateEngine.ContainsClipboard(item.Text))
+            if (usesClipboard && string.IsNullOrWhiteSpace(clipboard))
             {
                 ToastWindow.ShowToast(
                     "クリップボードが空です",
@@ -394,6 +406,13 @@ namespace MyTaskTray
 
         private void TrySaveSettings()
         {
+            // 設定ファイルを読めずに既定値で動いている状態では、
+            // 連番の自動保存で利用者の設定を既定値に置き換えてしまう
+            if (_settings.IsFallback)
+            {
+                return;
+            }
+
             try
             {
                 SettingsStore.Save(_settings);
@@ -406,6 +425,26 @@ namespace MyTaskTray
 
         private void ShowSettingsWindow()
         {
+            // 設定ファイルを読めていない状態で編集画面を開くと、
+            // 空の内容で保存して元の設定を失うおそれがある。
+            // 一時的なロックなら読み直しで解消するので、まず試す
+            if (_settings.IsFallback)
+            {
+                ReloadSettings();
+            }
+
+            if (_settings.IsFallback)
+            {
+                System.Windows.MessageBox.Show(
+                    "設定ファイルを読み込めませんでした。他のソフトが使用している可能性があります。\n"
+                    + "しばらく待ってから、もう一度お試しください。\n\n"
+                    + SettingsStore.FilePath,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
             if (_settingsWindow is not null)
             {
                 _settingsWindow.Activate();

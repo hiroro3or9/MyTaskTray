@@ -16,8 +16,17 @@ namespace MyTaskTray.Models
         private int _sequenceValue = 1;
         private int _sequenceStep = 1;
 
-        /// <summary>項目を識別する ID。連番カウンターの引き継ぎに使う。</summary>
-        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        /// <summary>
+        /// 項目を識別する ID。連番カウンターの引き継ぎに使う。
+        /// 既定値を空にしているのは「設定ファイルに書かれていなかった」ことを見分けるため。
+        /// ここで <c>Guid.NewGuid()</c> を初期値にすると、手で書いた ID なしの項目が
+        /// 読み込むたびに別の ID になり、引き継ぎの突き合わせが必ず失敗する。
+        /// 空の場合は <see cref="Services.SettingsStore.Load"/> と設定画面の保存時に採番する。
+        /// </summary>
+        public string Id { get; set; } = string.Empty;
+
+        /// <summary>新しい項目の ID を作る。</summary>
+        public static string NewId() => Guid.NewGuid().ToString("N");
 
         /// <summary>メニューに表示する名前。</summary>
         public string Name

@@ -29,6 +29,12 @@ namespace MyTaskTray.ViewModels
         private bool _showCopyNotification;
         private bool _isDirty;
 
+        // プレビューに使うクリップボードの内容。
+        // Preview の中で毎回読むと、入力欄を 1 文字打つたびにクリップボードを開くことになり、
+        // 他アプリのコピー操作と競合する（ロック中は再試行のあいだ画面が止まる）。
+        // ウィンドウがアクティブになったときなど、区切りのよいところでだけ読み直す。
+        private string _clipboard = string.Empty;
+
         public SettingsViewModel(AppSettings settings)
         {
             Version = settings.Version;
@@ -150,6 +156,7 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(ShowEditorHint));
                 OnPropertyChanged(nameof(EditorHint));
                 OnPropertyChanged(nameof(Preview));
+                OnPropertyChanged(nameof(NeedsPreviewRefresh));
             }
         }
 
@@ -171,6 +178,15 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>選択項目が連番を使っているときだけ、連番の設定欄を出す。</summary>
         public bool IsSequenceVisible => IsItemEditable && SelectedItem!.UsesSequence;
+
+        /// <summary>
+        /// プレビューを一定間隔で更新し続ける必要があるかどうか。
+        /// <c>{time}</c> のように時間の経過で変わる差し込みを含むときだけ true。
+        /// 常に更新すると、<c>{guid}</c> や <c>{random}</c> を含む項目のプレビューが
+        /// 毎秒書き換わってしまい「実際にコピーされる文字列」という表示と食い違う。
+        /// </summary>
+        public bool NeedsPreviewRefresh
+            => IsItemEditable && TemplateEngine.ContainsTimeSensitive(SelectedItem!.Text);
 
         /// <summary>一覧の下に出す件数の表示。</summary>
         public string StatusText
@@ -201,26 +217,42 @@ namespace MyTaskTray.ViewModels
                 }
 
                 return TemplateEngine.Expand(
-                    SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue, ClipboardService.GetText);
+                    SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue, () => _clipboard);
             }
         }
 
         /// <summary>時刻の差し込みに追従させるため、外から再評価を促す。</summary>
         public void RefreshPreview() => OnPropertyChanged(nameof(Preview));
 
+        /// <summary>
+        /// プレビューに使うクリップボードの内容を読み直す。
+        /// 他アプリでコピーしてから設定画面に戻ってきたときなど、区切りのよいところで呼ぶ。
+        /// </summary>
+        public void RefreshClipboard()
+        {
+            string latest = ClipboardService.GetText();
+            if (string.Equals(_clipboard, latest, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _clipboard = latest;
+            OnPropertyChanged(nameof(Preview));
+        }
+
         /// <summary>差し込み一覧の「現在値」を今の時刻で作り直す。</summary>
         public void RefreshPlaceholderSamples()
         {
+            // クリップボードの読み取りは一覧全体で 1 回で済ませる
+            RefreshClipboard();
+
             DateTime now = DateTime.Now;
             int sequence = SelectedItem?.SequenceValue ?? 1;
-
-            // クリップボードの読み取りは一覧全体で 1 回で済ませる
-            string clipboard = ClipboardService.GetText();
 
             foreach (PlaceholderRow row in Placeholders)
             {
                 row.Sample = TemplateEngine.ToSingleLine(
-                    TemplateEngine.Expand(row.Token, now, sequence, () => clipboard), 60);
+                    TemplateEngine.Expand(row.Token, now, sequence, () => _clipboard), 60);
             }
         }
 
@@ -346,6 +378,7 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.Text):
                     OnPropertyChanged(nameof(Preview));
                     OnPropertyChanged(nameof(IsSequenceVisible));
+                    OnPropertyChanged(nameof(NeedsPreviewRefresh));
                     break;
 
                 case nameof(ClipItem.SequenceValue):

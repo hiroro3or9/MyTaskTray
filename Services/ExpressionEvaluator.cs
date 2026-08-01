@@ -30,6 +30,13 @@ namespace MyTaskTray.Services
         private const int MaxDecimals = 28;
 
         /// <summary>
+        /// 再帰下降の深さの上限。<c>((((…</c> や <c>----…</c> や <c>^</c> の連続を深く書かれると
+        /// <see cref="StackOverflowException"/> になるが、これは .NET では捕捉できずプロセスごと落ちる。
+        /// 実用上ここまで深い式は書かないため、その手前で打ち切る。
+        /// </summary>
+        private const int MaxDepth = 64;
+
+        /// <summary>
         /// 書式を指定しなかったときの表記。<c>#</c> は末尾の 0 を出さないため
         /// 2 は "2"、1.5 は "1.5" になる。1/3 のような割り切れない値は小数 10 桁で丸める。
         /// </summary>
@@ -77,6 +84,7 @@ namespace MyTaskTray.Services
         private sealed class Parser(string text)
         {
             private int _pos = 0;
+            private int _depth = 0;
 
             public void ExpectEnd()
             {
@@ -143,17 +151,30 @@ namespace MyTaskTray.Services
             /// <summary>べき乗（右結合）。</summary>
             private decimal ParsePower()
             {
-                decimal value = ParseUnary();
-
-                SkipSpace();
-                if (Peek() == '^')
+                // 再帰の入口は 2 か所しかない。
+                //   ・ここ: かっこ・関数の引数（ParsePrimary → ParseExpression → … → ParsePower）と
+                //           ^ の連続（ParsePower → ParsePower）が必ず通る
+                //   ・ParseUnary: 符号の連続（ParseUnary → ParseUnary）はここを通らない
+                // この 2 か所で数えれば、どの書き方で深くしても打ち切れる。
+                EnterDepth();
+                try
                 {
-                    _pos++;
-                    decimal exponent = ParsePower();
-                    return Power(value, exponent);
-                }
+                    decimal value = ParseUnary();
 
-                return value;
+                    SkipSpace();
+                    if (Peek() == '^')
+                    {
+                        _pos++;
+                        decimal exponent = ParsePower();
+                        return Power(value, exponent);
+                    }
+
+                    return value;
+                }
+                finally
+                {
+                    _depth--;
+                }
             }
 
             private decimal ParseUnary()
@@ -161,19 +182,32 @@ namespace MyTaskTray.Services
                 SkipSpace();
                 char c = Peek();
 
-                if (c == '-')
+                if (c != '-' && c != '+')
                 {
-                    _pos++;
-                    return -ParseUnary();
+                    return ParsePostfix();
                 }
 
-                if (c == '+')
+                _pos++;
+                EnterDepth();
+                try
                 {
-                    _pos++;
-                    return ParseUnary();
+                    return c == '-' ? -ParseUnary() : ParseUnary();
                 }
+                finally
+                {
+                    _depth--;
+                }
+            }
 
-                return ParsePostfix();
+            /// <summary>
+            /// 再帰の深さを 1 段増やす。深すぎる場合は <see cref="StackOverflowException"/> になる前に打ち切る。
+            /// </summary>
+            private void EnterDepth()
+            {
+                if (++_depth > MaxDepth)
+                {
+                    throw new ExpressionException($"式の入れ子が深すぎます（{MaxDepth} 段まで）。");
+                }
             }
 
             /// <summary>後置の % を適用する（8% → 0.08）。</summary>

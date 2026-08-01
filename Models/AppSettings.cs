@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MyTaskTray.Models
 {
     /// <summary>
@@ -5,6 +7,14 @@ namespace MyTaskTray.Models
     /// </summary>
     public class AppSettings
     {
+        /// <summary>
+        /// 設定ファイルを読めず、既定値で代用しているかどうか。
+        /// この状態のまま保存すると利用者の設定を既定値で上書きしてしまうため、
+        /// 連番の自動保存のような「利用者が指示していない保存」は行わない。
+        /// </summary>
+        [JsonIgnore]
+        public bool IsFallback { get; set; }
+
         /// <summary>設定ファイルのフォーマットバージョン。</summary>
         public int Version { get; set; } = 1;
 
@@ -22,8 +32,10 @@ namespace MyTaskTray.Models
                 new() { Name = "メールアドレス", Text = "example@example.com" },
                 new() { Name = "電話番号", Text = "03-0000-0000" },
                 new() { IsSeparator = true },
-                new() { Category = "日付", Name = "今日 (2026/07/30)", Text = "{date}" },
-                new() { Category = "日付", Name = "今日 (20260730)", Text = "{date:yyyyMMdd}" },
+                // 名前に具体的な日付を書くと、初回起動した日と食い違って誤解を招くため書式で示す。
+                // 実際の値はメニューのツールチップと設定画面のプレビューで確認できる
+                new() { Category = "日付", Name = "今日 (yyyy/MM/dd)", Text = "{date}" },
+                new() { Category = "日付", Name = "今日 (yyyyMMdd)", Text = "{date:yyyyMMdd}" },
                 new() { Category = "日付", Name = "現在の日時", Text = "{datetime}" },
                 new() { Category = "日付", Name = "明日", Text = "{date+1}" },
                 new() { Category = "日付", Name = "今月末", Text = "{monthend}" },
