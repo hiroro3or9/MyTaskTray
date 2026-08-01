@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MyTaskTray.Services;
 
 namespace MyTaskTray.Models
 {
@@ -23,6 +24,24 @@ namespace MyTaskTray.Models
 
         /// <summary>コピーしたときに画面右下へ小さな通知を出すかどうか。</summary>
         public bool ShowCopyNotification { get; set; } = true;
+
+        /// <summary>
+        /// スプリントの区切りを数え始める日（どれか 1 つのスプリントの開始日）。
+        /// null なら未設定で、<c>@sprint</c> を使った差し込みは展開されない。
+        /// </summary>
+        public DateTime? SprintAnchorDate { get; set; }
+
+        /// <summary>スプリント 1 つの長さ（日数）。</summary>
+        public int SprintLengthDays { get; set; } = 14;
+
+        /// <summary>
+        /// 差し込みの <c>@sprint</c> が参照する区切り。設定が揃っていなければ null。
+        /// </summary>
+        [JsonIgnore]
+        public SprintSchedule? Sprint
+            => SprintAnchorDate is { } anchor && SprintLengthDays >= 1
+                ? new SprintSchedule(anchor, SprintLengthDays)
+                : null;
 
         /// <summary>初回起動時に表示するサンプル設定を作る。</summary>
         public static AppSettings CreateDefault() => new()
@@ -50,6 +69,8 @@ namespace MyTaskTray.Models
         {
             Version = Version,
             ShowCopyNotification = ShowCopyNotification,
+            SprintAnchorDate = SprintAnchorDate,
+            SprintLengthDays = SprintLengthDays,
             Items = [.. Items.Select(i => i.Clone())],
         };
     }

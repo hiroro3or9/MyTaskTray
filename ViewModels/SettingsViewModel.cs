@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows.Data;
 using MyTaskTray.Models;
@@ -13,6 +14,12 @@ namespace MyTaskTray.ViewModels
     /// </summary>
     public class SettingsViewModel : INotifyPropertyChanged
     {
+        /// <summary>スプリントの基準日を入力・保存するときの表記。</summary>
+        private const string SprintDateFormat = "yyyy-MM-dd";
+
+        /// <summary>スプリントの長さとして受け付ける上限（日）。約 2 年。</summary>
+        private const int MaxSprintLengthDays = 730;
+
         private readonly ICollectionView _itemsView;
 
         // 画面上で「次の番号」を直接編集した項目の Id。
@@ -29,6 +36,16 @@ namespace MyTaskTray.ViewModels
         private bool _showCopyNotification;
         private bool _isDirty;
 
+        // トレイ側で進んだ連番を取り込んでいる最中かどうか。
+        // 取り込みは利用者の編集ではないため、「未保存」にも
+        // 「画面で直接指定した番号」にも数えてはいけない。
+        private bool _adoptingSequence;
+
+        // スプリントの設定は入力途中でも打ち直せるよう文字列で持ち、
+        // 解釈できたときだけ差し込みに反映する。
+        private string _sprintAnchorText = string.Empty;
+        private string _sprintLengthText = string.Empty;
+
         // プレビューに使うクリップボードの内容。
         // Preview の中で毎回読むと、入力欄を 1 文字打つたびにクリップボードを開くことになり、
         // 他アプリのコピー操作と競合する（ロック中は再試行のあいだ画面が止まる）。
@@ -39,6 +56,9 @@ namespace MyTaskTray.ViewModels
         {
             Version = settings.Version;
             _showCopyNotification = settings.ShowCopyNotification;
+            _sprintAnchorText = settings.SprintAnchorDate?.ToString(SprintDateFormat, CultureInfo.InvariantCulture)
+                ?? string.Empty;
+            _sprintLengthText = settings.SprintLengthDays.ToString(CultureInfo.InvariantCulture);
 
             Items = new ObservableCollection<ClipItem>(settings.Items);
             KnownCategories = [];
@@ -104,6 +124,100 @@ namespace MyTaskTray.ViewModels
                 _showCopyNotification = value;
                 IsDirty = true;
                 OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// スプリントの基準日（yyyy-MM-dd）。どれか 1 つのスプリントの開始日を書く。
+        /// 空、または解釈できない文字列のあいだは <c>@sprint</c> の差し込みを展開しない。
+        /// </summary>
+        public string SprintAnchorText
+        {
+            get => _sprintAnchorText;
+            set
+            {
+                string next = value ?? string.Empty;
+                if (string.Equals(_sprintAnchorText, next, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _sprintAnchorText = next;
+                IsDirty = true;
+                OnPropertyChanged();
+                OnSprintChanged();
+            }
+        }
+
+        /// <summary>スプリント 1 つの長さ（日数）。</summary>
+        public string SprintLengthText
+        {
+            get => _sprintLengthText;
+            set
+            {
+                string next = value ?? string.Empty;
+                if (string.Equals(_sprintLengthText, next, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _sprintLengthText = next;
+                IsDirty = true;
+                OnPropertyChanged();
+                OnSprintChanged();
+            }
+        }
+
+        /// <summary>
+        /// 入力から組み立てた区切り。解釈できなければ null（差し込みは書いたまま残る）。
+        /// </summary>
+        public SprintSchedule? Sprint
+        {
+            get
+            {
+                if (!DateTime.TryParseExact(
+                        _sprintAnchorText.Trim(),
+                        SprintDateFormat,
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.None,
+                        out DateTime anchor))
+                {
+                    return null;
+                }
+
+                if (!int.TryParse(
+                        _sprintLengthText.Trim(),
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out int length)
+                    || length < 1
+                    || length > MaxSprintLengthDays)
+                {
+                    return null;
+                }
+
+                return new SprintSchedule(anchor, length);
+            }
+        }
+
+        /// <summary>スプリント設定の入力欄の下に出す説明。いまのスプリントの期間か、誤りの内容。</summary>
+        public string SprintStatus
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_sprintAnchorText))
+                {
+                    return "基準日を入れると {date@sprint} などが使えるようになります。";
+                }
+
+                if (Sprint is not { } sprint)
+                {
+                    return $"基準日は {SprintDateFormat}（例 2026-04-06）、長さは 1〜{MaxSprintLengthDays} の数字で入れてください。";
+                }
+
+                DateTime start = sprint.StartOf(DateTime.Now);
+                DateTime end = start.AddDays(sprint.LengthDays - 1);
+                return $"いまのスプリント: {start:yyyy/MM/dd}（{start:ddd}）〜 {end:yyyy/MM/dd}（{end:ddd}）";
             }
         }
 
@@ -217,8 +331,16 @@ namespace MyTaskTray.ViewModels
                 }
 
                 return TemplateEngine.Expand(
-                    SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue, () => _clipboard);
+                    SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue, () => _clipboard, Sprint);
             }
+        }
+
+        /// <summary>スプリントの設定が変わったので、それに依存する表示を作り直す。</summary>
+        private void OnSprintChanged()
+        {
+            OnPropertyChanged(nameof(SprintStatus));
+            OnPropertyChanged(nameof(Preview));
+            RebuildPlaceholderSamples();
         }
 
         /// <summary>時刻の差し込みに追従させるため、外から再評価を促す。</summary>
@@ -245,14 +367,60 @@ namespace MyTaskTray.ViewModels
         {
             // クリップボードの読み取りは一覧全体で 1 回で済ませる
             RefreshClipboard();
+            RebuildPlaceholderSamples();
+        }
 
+        /// <summary>
+        /// 覚えているクリップボードの内容のまま、差し込み一覧の「現在値」を作り直す。
+        /// スプリントの入力欄のように 1 文字ごとに呼ばれる場面では、
+        /// 毎回クリップボードを開くと他アプリのコピー操作と競合するため、読み直さない。
+        /// </summary>
+        private void RebuildPlaceholderSamples()
+        {
             DateTime now = DateTime.Now;
             int sequence = SelectedItem?.SequenceValue ?? 1;
+            SprintSchedule? sprint = Sprint;
 
             foreach (PlaceholderRow row in Placeholders)
             {
                 row.Sample = TemplateEngine.ToSingleLine(
-                    TemplateEngine.Expand(row.Token, now, sequence, () => _clipboard), 60);
+                    TemplateEngine.Expand(row.Token, now, sequence, () => _clipboard, sprint), 60);
+            }
+        }
+
+        /// <summary>
+        /// トレイからのコピーで進んだ連番を、画面の表示にも取り込む。
+        ///
+        /// 設定画面は設定の複製を持っているため、トレイ側で番号が進んでも
+        /// 黙っていると画面の「次の番号」が古いままになる。
+        /// 保存時には <c>AdoptExternalSequenceValues()</c> が突き合わせるので値は失われないが、
+        /// 開いているあいだ実際と違う番号が見えているのは紛らわしい。
+        ///
+        /// 画面で「次の番号」を直接編集した項目は、利用者の指定を優先して対象外にする
+        /// （保存時の突き合わせと同じ規則）。
+        /// </summary>
+        public void AdoptSequenceValue(string id, int value)
+        {
+            if (string.IsNullOrEmpty(id) || _sequenceEditedIds.Contains(id))
+            {
+                return;
+            }
+
+            ClipItem? item = Items.FirstOrDefault(i => string.Equals(i.Id, id, StringComparison.Ordinal));
+            if (item is null || item.SequenceValue == value)
+            {
+                return;
+            }
+
+            _adoptingSequence = true;
+            try
+            {
+                // 値の変更は ClipItem 自身が通知するため、画面の表示とプレビューは自動で追従する
+                item.SequenceValue = value;
+            }
+            finally
+            {
+                _adoptingSequence = false;
             }
         }
 
@@ -278,13 +446,23 @@ namespace MyTaskTray.ViewModels
         /// <summary>カテゴリ候補があるかどうか。</summary>
         public bool HasCategories => KnownCategories.Count > 0;
 
-        /// <summary>保存用の設定オブジェクトを作る。</summary>
-        public AppSettings ToSettings() => new()
+        /// <summary>
+        /// 保存用の設定オブジェクトを作る。
+        /// スプリントの入力が解釈できない場合は、誤った区切りを保存してしまわないよう未設定として扱う。
+        /// </summary>
+        public AppSettings ToSettings()
         {
-            Version = Version,
-            ShowCopyNotification = ShowCopyNotification,
-            Items = [.. Items.Select(i => i.Clone())],
-        };
+            SprintSchedule? sprint = Sprint;
+
+            return new()
+            {
+                Version = Version,
+                ShowCopyNotification = ShowCopyNotification,
+                SprintAnchorDate = sprint?.AnchorDate,
+                SprintLengthDays = sprint?.LengthDays ?? 14,
+                Items = [.. Items.Select(i => i.Clone())],
+            };
+        }
 
         /// <summary>保存が完了したことを伝える。</summary>
         public void MarkSaved() => IsDirty = false;
@@ -353,6 +531,14 @@ namespace MyTaskTray.ViewModels
                     break;
 
                 case nameof(ClipItem.SequenceValue):
+                    // トレイ側で進んだ値の取り込みは利用者の編集ではない。
+                    // ここで数えてしまうと、開いているだけで「未保存」になり、
+                    // そのうえ以降の取り込みが止まってしまう
+                    if (_adoptingSequence)
+                    {
+                        break;
+                    }
+
                     IsDirty = true;
 
                     // 「次の番号」を画面で直接指定した場合は、トレイ側で進んだ値より優先する。

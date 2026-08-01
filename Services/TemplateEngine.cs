@@ -11,16 +11,51 @@ namespace MyTaskTray.Services
     public sealed record PlaceholderInfo(string Token, string Group, string Description);
 
     /// <summary>
+    /// スプリント（一定の日数で繰り返す期間）の区切り。
+    /// <paramref name="AnchorDate"/> はどれか 1 つのスプリントの開始日で、
+    /// そこから <paramref name="LengthDays"/> 日ごとに区切りが並んでいるものとして扱う。
+    /// </summary>
+    public sealed record SprintSchedule(DateTime AnchorDate, int LengthDays)
+    {
+        /// <summary>設定として妥当かどうか（長さが 1 日以上）。</summary>
+        public bool IsValid => LengthDays >= 1;
+
+        /// <summary><paramref name="value"/> を含むスプリントの開始日を返す。</summary>
+        public DateTime StartOf(DateTime value)
+        {
+            if (!IsValid)
+            {
+                // 呼び出し側で弾いているが、0 除算でプロセスを巻き込まないための保険
+                return value.Date;
+            }
+
+            DateTime anchor = AnchorDate.Date;
+            double days = (value.Date - anchor).TotalDays;
+
+            // 基準日より前でも 1 つ前のスプリントに落ちるよう、負の側にも切り下げる
+            double index = Math.Floor(days / LengthDays);
+            return anchor.AddDays(index * LengthDays);
+        }
+    }
+
+    /// <summary>
     /// コピー文字列に含まれる <c>{...}</c> 形式の差し込みを展開する。
     ///
-    /// 書式: <c>{名前[±数値[単位]][:書式]}</c>
+    /// 書式: <c>{名前[@基準][±数値[単位]]…[:書式]}</c>
     ///   例) {date}  {date:yyyyMMdd}  {date+1}  {date-1w:M月d日}  {seq:0000}  {seq+1}  {guid}
+    /// 基準: 展開の起点となる日付を今日から差し替える。
+    ///   @sprint    今日を含むスプリントの開始日（設定の基準日と長さから求める）
+    ///   @clip      クリップボードに入っている日付
+    ///   @date @monthstart @monthend @weekstart @weekend  既存の日付の差し込みと同じ日
+    ///   例) {date@sprint:yyyyMMdd}  {date@clip+1w}  {week@monthstart}  {year@sprint-3mo}
+    /// オフセットは複数書ける（書いた順に適用する）。
+    ///   例) {date@sprint+1sp-1}（今のスプリントの最終日）  {date+1mo-1}（翌月の前日）
     /// 計算式: <c>{calc:式[|書式]}</c>（<c>{=式}</c> と書いてもよい）
     ///   例) {calc:(1000+200)*1.1}  {calc:1000*8%|#,##0}  {calc:{seq}*100}
     /// クリップボード: <c>{clip[:書式]}</c>
     ///   例) {clip}  {clip:digits}  {clip:/ID-(\d+)/}
     /// <c>{{</c> と <c>}}</c> はそれぞれ <c>{</c> <c>}</c> のエスケープ。
-    /// 解釈できない差し込み（未知の名前・単位・書式、オフセットを付けられない差し込みなど）は、
+    /// 解釈できない差し込み（未知の名前・基準・単位・書式、オフセットを付けられない差し込みなど）は、
     /// 書いたままの文字列を残してユーザーが誤りに気付けるようにする。
     /// </summary>
     public static partial class TemplateEngine
@@ -38,12 +73,33 @@ namespace MyTaskTray.Services
         /// </summary>
         private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(200);
 
-        // 名前 + 任意のオフセット + 任意の書式。
+        // 名前 + 任意の基準 + 任意のオフセット（複数可）+ 任意の書式。
+        // オフセットは必ず符号で始まるため、繰り返しても切り出し方が一通りに決まる。
         // GeneratedRegex はコンパイル時に実装を生成するため、RegexOptions.Compiled は不要。
         [GeneratedRegex(
-            @"^(?<name>[A-Za-z]+)(?:(?<sign>[+\-])(?<num>\d+)(?<unit>[A-Za-z]*))?(?::(?<fmt>.*))?$",
+            @"^(?<name>[A-Za-z]+)(?:@(?<base>[A-Za-z]+))?(?:(?<sign>[+\-])(?<num>\d+)(?<unit>[A-Za-z]*))*(?::(?<fmt>.*))?$",
             RegexOptions.CultureInvariant)]
         private static partial Regex InnerRegex();
+
+        // クリップボードの文字列から日付らしい並びを取り出す（{date@clip} 用）。
+        // 年を 4 桁に限ることで、電話番号（03-0000-0000）のような並びを拾わないようにする。
+        [GeneratedRegex(
+            @"(?<y>\d{4})\s*[-/.年]\s*(?<mo>\d{1,2})\s*[-/.月]\s*(?<d>\d{1,2})\s*日?|(?<!\d)(?<ymd>\d{8})(?!\d)",
+            RegexOptions.CultureInvariant)]
+        private static partial Regex ClipboardDateRegex();
+
+        /// <summary>
+        /// <c>@clip</c> が「文字列全体が日付」として受け付ける表記。
+        /// 地域設定の解釈（<c>08/15/2026</c> のような並び）に左右されないよう、明示的に列挙する。
+        /// </summary>
+        /// <remarks>
+        /// <c>M</c> / <c>d</c> は 1 桁でも 2 桁でも読めるため、
+        /// <c>2026-8-15</c> と <c>2026-08-15</c> の両方をこの 1 つで受け付ける。
+        /// </remarks>
+        private static readonly string[] ClipboardDateFormats =
+        [
+            "yyyy-M-d", "yyyy/M/d", "yyyy.M.d", "yyyyMMdd", "yyyy年M月d日",
+        ];
 
         // {random:1-6} の範囲。{random:-5-5} や {random:-10--5} のように下限が負でも読めるようにする。
         [GeneratedRegex(
@@ -60,6 +116,12 @@ namespace MyTaskTray.Services
             new("{clip:line}", "クリップボード", "1 行目だけを取り出す"),
             new("{clip:upper}", "クリップボード", "大文字にする（lower で小文字）"),
             new("{clip:raw}", "クリップボード", "空白や改行も含めてそのまま"),
+            new("{date@clip:yyyyMMdd}", "クリップボードの日付",
+                "コピーしてある日付を別の書式にする（2026/08/15 → 20260815）"),
+            new("{date@clip:yyyy年M月d日}", "クリップボードの日付", "和文の日付にする"),
+            new("{date@clip:ddd}", "クリップボードの日付", "その日の曜日"),
+            new("{date@clip+1w}", "クリップボードの日付", "その 1 週間後（単位は {date} と同じ）"),
+            new("{week@clip}", "クリップボードの日付", "その日の ISO 週番号（{month@clip} なども同様）"),
             new("{date}", "日付", "今日の日付"),
             new("{date:yyyyMMdd}", "日付", "書式を指定した日付"),
             new("{date:yyyy年M月d日}", "日付", "和文の日付"),
@@ -72,10 +134,20 @@ namespace MyTaskTray.Services
             new("{hour}", "時刻", "現在の時（0〜23。{hour:00} で 2 桁）"),
             new("{minute}", "時刻", "現在の分（0〜59）"),
             new("{second}", "時刻", "現在の秒（0〜59）"),
+            new("{date@sprint}", "スプリント", "今日を含むスプリントの開始日（設定の基準日と長さから求める）"),
+            new("{date@sprint:yyyyMMdd}", "スプリント", "書式を指定したスプリント開始日"),
+            new("{date@sprint+1sp}", "スプリント", "次のスプリントの開始日（-1sp で前のスプリント）"),
+            new("{date@sprint+1sp-1}", "スプリント", "今のスプリントの最終日（オフセットは重ねて書ける）"),
+            new("{calc:{year@sprint-3mo}-1996}-{calc:ceil({month@sprint-3mo}/3)}", "スプリント",
+                "スプリント名。3 か月ずらして年度と年度内四半期（4〜6月=1）を求める"),
+            new("{year@sprint-3mo}", "スプリント", "スプリント開始日の年度（4 月始まり。1〜3 月は前年度）"),
+            new("{calc:ceil({month@sprint-3mo}/3)}", "スプリント", "スプリント開始日の年度内四半期（1〜4）"),
             new("{monthstart}", "月・週", "今月の初日（+1 で翌月）"),
             new("{monthend}", "月・週", "今月の末日（+1 で翌月）"),
             new("{weekstart}", "月・週", "今週の月曜日（+1 で翌週）"),
             new("{weekend}", "月・週", "今週の日曜日"),
+            new("{date+1mo-1}", "月・週", "翌月の前日（オフセットは重ねて書ける）"),
+            new("{week@monthstart}", "月・週", "今月 1 日の ISO 週番号（@ で基準の日を差し替える）"),
             new("{calc:(1000+200)*1.1}", "計算", "式を計算する（+ - * / ^ とかっこ）"),
             new("{calc:1000*8%}", "計算", "パーセント。8% は 0.08 として扱う"),
             new("{calc:1000*1.1|#,##0}", "計算", "| のうしろは数値の書式（#,##0 / 0.00 など）"),
@@ -106,13 +178,17 @@ namespace MyTaskTray.Services
         /// クリップボードの読み取りは <c>{clip}</c> が実際に現れたときだけ行い、
         /// 同じ展開の中では何度使っても同じ値になるように覚えておく。
         /// </summary>
-        private sealed class ExpandContext(DateTime now, int sequenceValue, Func<string>? clipboard)
+        private sealed class ExpandContext(
+            DateTime now, int sequenceValue, Func<string>? clipboard, SprintSchedule? sprint)
         {
             private string? _clipboard;
 
             public DateTime Now { get; } = now;
 
             public int SequenceValue { get; } = sequenceValue;
+
+            /// <summary>スプリントの区切り。未設定なら <c>@sprint</c> は書いたままにする。</summary>
+            public SprintSchedule? Sprint { get; } = sprint is { IsValid: true } ? sprint : null;
 
             /// <summary>呼び出し元がクリップボードの読み取り手段を渡しているかどうか。</summary>
             public bool HasClipboard { get; } = clipboard is not null;
@@ -122,7 +198,7 @@ namespace MyTaskTray.Services
 
         /// <summary>差し込みを展開した文字列を返す。</summary>
         public static string Expand(string template, DateTime now, int sequenceValue)
-            => Expand(template, now, sequenceValue, null);
+            => Expand(template, now, sequenceValue, null, null);
 
         /// <summary>差し込みを展開した文字列を返す。</summary>
         /// <param name="clipboard">
@@ -130,7 +206,20 @@ namespace MyTaskTray.Services
         /// null の場合、<c>{clip}</c> は書いたままの文字列として残す。
         /// </param>
         public static string Expand(string template, DateTime now, int sequenceValue, Func<string>? clipboard)
-            => Expand(template, new ExpandContext(now, sequenceValue, clipboard), 0, false);
+            => Expand(template, now, sequenceValue, clipboard, null);
+
+        /// <summary>差し込みを展開した文字列を返す。</summary>
+        /// <param name="clipboard">
+        /// <c>{clip}</c> が現れたときに呼ばれ、クリップボードの文字列を返す関数。
+        /// null の場合、<c>{clip}</c> は書いたままの文字列として残す。
+        /// </param>
+        /// <param name="sprint">
+        /// <c>@sprint</c> と <c>sp</c> 単位が参照するスプリントの区切り。
+        /// null（未設定）の場合、それらを使った差し込みは書いたままの文字列として残す。
+        /// </param>
+        public static string Expand(
+            string template, DateTime now, int sequenceValue, Func<string>? clipboard, SprintSchedule? sprint)
+            => Expand(template, new ExpandContext(now, sequenceValue, clipboard, sprint), 0, false);
 
         /// <summary>
         /// 差し込みを展開する。計算式は中に別の差し込みを書けるため、
@@ -240,13 +329,30 @@ namespace MyTaskTray.Services
         /// 連番の差し込みを含むかどうか。含む場合、コピー後にカウンターを進める。
         /// <c>{{seq}}</c> のようにエスケープした場合はリテラルの文字列になるため、含まないと判定する。
         /// </summary>
-        public static bool ContainsSequence(string template) => ContainsToken(template, IsSequenceName, 0);
+        public static bool ContainsSequence(string template)
+            => ContainsToken(template, static (name, _) => IsSequenceName(name), 0);
 
         /// <summary>
         /// クリップボードの差し込みを含むかどうか。
         /// 含む場合だけクリップボードを読みに行き、空のときに注意を促す。
+        /// 名前（<c>{clip}</c>）だけでなく基準（<c>{date@clip}</c>）も数える。
         /// </summary>
-        public static bool ContainsClipboard(string template) => ContainsToken(template, IsClipboardName, 0);
+        public static bool ContainsClipboard(string template)
+            => ContainsToken(template, static (name, @base) => IsClipboardName(name) || IsClipboardName(@base), 0);
+
+        /// <summary>
+        /// クリップボードを<strong>日付として</strong>読む差し込み（<c>{date@clip}</c> など）を含むかどうか。
+        /// 含む場合、コピーする前に <see cref="CanParseClipboardDate"/> で読めるかを確かめる。
+        /// </summary>
+        public static bool ContainsClipboardDate(string template)
+            => ContainsToken(template, static (_, @base) => IsClipboardName(@base), 0);
+
+        /// <summary>
+        /// クリップボードの文字列を日付として読めるかどうか。
+        /// 読めないまま展開すると、差し込みが書いたまま残った文字列がコピーされてしまう。
+        /// </summary>
+        public static bool CanParseClipboardDate(string clipboard)
+            => TryParseClipboardDate(clipboard) is not null;
 
         /// <summary>
         /// 秒〜分の単位で結果が変わる差し込み（<c>{time}</c> など）を含むかどうか。
@@ -255,7 +361,10 @@ namespace MyTaskTray.Services
         /// 時間の経過で変わるわけではないため含めない（更新するとプレビューがちらつくだけになる）。
         /// </summary>
         public static bool ContainsTimeSensitive(string template)
-            => ContainsToken(template, IsTimeSensitiveName, 0);
+            => ContainsToken(
+                template,
+                static (name, @base) => IsTimeSensitiveName(name) || IsTimeSensitiveName(@base),
+                0);
 
         private static bool IsSequenceName(string name)
             => name.Equals("seq", StringComparison.OrdinalIgnoreCase);
@@ -270,9 +379,13 @@ namespace MyTaskTray.Services
         };
 
         /// <summary>
-        /// 条件に合う名前の差し込みを含むかどうか。計算式の中に書かれている場合も含むと判定する。
+        /// 条件に合う差し込みを含むかどうか。計算式の中に書かれている場合も含むと判定する。
         /// </summary>
-        private static bool ContainsToken(string template, Func<string, bool> matchesName, int depth)
+        /// <param name="matches">
+        /// 差し込みの名前と基準（<c>@…</c>。無ければ空文字）を受け取り、数えるかどうかを返す。
+        /// 名前と基準のどちらを見るかは条件ごとに違うため、呼び出し側で決める。
+        /// </param>
+        private static bool ContainsToken(string template, Func<string, string, bool> matches, int depth)
         {
             if (string.IsNullOrEmpty(template) || depth > MaxDepth)
             {
@@ -308,7 +421,7 @@ namespace MyTaskTray.Services
                 string inner = template[(i + 1)..close];
 
                 // {seq} 自身か、{calc:{seq}*100} のように式の中で使われている場合
-                if (IsToken(inner, matchesName) || ContainsToken(inner, matchesName, depth + 1))
+                if (IsToken(inner, matches) || ContainsToken(inner, matches, depth + 1))
                 {
                     return true;
                 }
@@ -319,11 +432,26 @@ namespace MyTaskTray.Services
             return false;
         }
 
-        /// <summary>差し込みの中身の名前が条件に合うかどうか（書式やオフセット付きも含む）。</summary>
-        private static bool IsToken(string inner, Func<string, bool> matchesName)
+        /// <summary>
+        /// 差し込みの中身が条件に合うかどうか（書式やオフセット付きも含む）。
+        ///
+        /// 名前だけでなく<strong>基準（<c>@…</c>）も渡す</strong>。
+        /// <c>{date@clip}</c> は名前が date だがクリップボードを読む必要があり、
+        /// 名前しか見ないと <see cref="ContainsClipboard"/> が false を返して
+        /// 空の文字列のまま展開されてしまう（しかも空クリップボードの警告も出ない）。
+        /// </summary>
+        private static bool IsToken(string inner, Func<string, string, bool> matches)
         {
             Match m = InnerRegex().Match(inner.Trim());
-            return m.Success && matchesName(m.Groups["name"].Value);
+
+            if (!m.Success)
+            {
+                return false;
+            }
+
+            return matches(
+                m.Groups["name"].Value,
+                m.Groups["base"].Success ? m.Groups["base"].Value : string.Empty);
         }
 
         private static string ExpandToken(string inner, string original, ExpandContext context, int depth)
@@ -347,27 +475,55 @@ namespace MyTaskTray.Services
                 return original;
             }
 
-            DateTime now = context.Now;
             int sequenceValue = context.SequenceValue;
             string name = m.Groups["name"].Value.ToLowerInvariant();
             string format = m.Groups["fmt"].Success ? m.Groups["fmt"].Value : string.Empty;
 
-            bool hasOffset = m.Groups["num"].Success;
-            int offset = 0;
-            string unit = string.Empty;
-            if (hasOffset)
+            // 基準（@sprint など）。日付を今日以外から数え始めたいときに使う
+            bool hasBase = m.Groups["base"].Success;
+            DateTime now = context.Now;
+            if (hasBase)
             {
-                if (!int.TryParse(m.Groups["num"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out offset))
+                // 未知の基準、スプリントが未設定、クリップボードが日付として読めない場合は、
+                // 黙って今日を使うと誤りに気付けないため書いたままを残す
+                if (ResolveBase(m.Groups["base"].Value.ToLowerInvariant(), context) is not { } resolved)
                 {
                     return original;
                 }
 
-                if (m.Groups["sign"].Value == "-")
+                now = resolved;
+            }
+
+            // オフセットは複数書ける（{date@sprint+1sp-1} など）。書いた順に適用する
+            CaptureCollection nums = m.Groups["num"].Captures;
+            CaptureCollection signs = m.Groups["sign"].Captures;
+            CaptureCollection units = m.Groups["unit"].Captures;
+
+            (int Offset, string Unit)[] offsets = new (int, string)[nums.Count];
+            for (int k = 0; k < nums.Count; k++)
+            {
+                if (!int.TryParse(nums[k].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
                 {
-                    offset = -offset;
+                    return original;
                 }
 
-                unit = m.Groups["unit"].Value.ToLowerInvariant();
+                offsets[k] = (signs[k].Value == "-" ? -value : value, units[k].Value.ToLowerInvariant());
+            }
+
+            bool hasOffset = offsets.Length > 0;
+
+            // オフセットを適用した日付。差し込みごとに既定の単位が違うため、その場で渡す
+            DateTime At(string defaultUnit)
+            {
+                DateTime value = now;
+                int sprintDays = context.Sprint?.LengthDays ?? 0;
+
+                foreach ((int offset, string unit) in offsets)
+                {
+                    value = Shift(value, offset, unit, defaultUnit, sprintDays);
+                }
+
+                return value;
             }
 
             try
@@ -375,37 +531,47 @@ namespace MyTaskTray.Services
                 switch (name)
                 {
                     case "date":
-                        return FormatDate(Shift(now, offset, unit, "d"), format, DefaultDateFormat);
+                        return FormatDate(At("d"), format, DefaultDateFormat);
 
                     case "time":
-                        return FormatDate(Shift(now, offset, unit, "mi"), format, DefaultTimeFormat);
+                        return FormatDate(At("mi"), format, DefaultTimeFormat);
 
                     case "datetime":
                     case "now":
-                        return FormatDate(Shift(now, offset, unit, "d"), format, DefaultDateTimeFormat);
+                        return FormatDate(At("d"), format, DefaultDateTimeFormat);
 
                     case "monthstart":
-                        return FormatDate(MonthStart(Shift(now, offset, unit, "mo")), format, DefaultDateFormat);
+                        return FormatDate(MonthStart(At("mo")), format, DefaultDateFormat);
 
                     case "monthend":
-                        return FormatDate(MonthEnd(Shift(now, offset, unit, "mo")), format, DefaultDateFormat);
+                        return FormatDate(MonthEnd(At("mo")), format, DefaultDateFormat);
 
                     case "weekstart":
-                        return FormatDate(WeekStart(Shift(now, offset, unit, "w")), format, DefaultDateFormat);
+                        return FormatDate(WeekStart(At("w")), format, DefaultDateFormat);
 
                     case "weekend":
-                        return FormatDate(WeekStart(Shift(now, offset, unit, "w")).AddDays(6), format, DefaultDateFormat);
+                        return FormatDate(WeekStart(At("w")).AddDays(6), format, DefaultDateFormat);
 
                     case "seq":
-                        // {seq+1} は「次の番号 + 1」。単位は意味を持たないため誤りとして扱う
-                        if (!string.IsNullOrEmpty(unit))
+                        RejectBase(name, hasBase);
+
+                        // {seq+1} は「次の番号 + 1」。日付ではないので、
+                        // 単位も、オフセットを重ねて書くことも意味を持たない
+                        if (offsets.Length > 1)
+                        {
+                            throw new FormatException("{seq} にオフセットは 1 つだけ指定できます。");
+                        }
+
+                        if (offsets.Length == 1 && !string.IsNullOrEmpty(offsets[0].Unit))
                         {
                             throw new FormatException("{seq} に単位は指定できません。");
                         }
 
-                        return FormatSequence(unchecked(sequenceValue + offset), format);
+                        return FormatSequence(
+                            unchecked(sequenceValue + (offsets.Length == 1 ? offsets[0].Offset : 0)), format);
 
                     case "clip":
+                        RejectBase(name, hasBase);
                         RejectOffset(name, hasOffset);
 
                         // 呼び出し元がクリップボードを読めない場面（テストなど）では
@@ -418,43 +584,44 @@ namespace MyTaskTray.Services
                         return FormatClipboard(context.Clipboard, format, original);
 
                     case "guid":
+                        RejectBase(name, hasBase);
                         RejectOffset(name, hasOffset);
                         return FormatGuid(format);
 
                     case "random":
+                        RejectBase(name, hasBase);
                         RejectOffset(name, hasOffset);
                         return FormatRandom(format);
 
                     case "year":
-                        return FormatNumber(Shift(now, offset, unit, "y").Year, format);
+                        return FormatNumber(At("y").Year, format);
 
                     case "month":
-                        return FormatNumber(Shift(now, offset, unit, "mo").Month, format);
+                        return FormatNumber(At("mo").Month, format);
 
                     case "day":
-                        return FormatNumber(Shift(now, offset, unit, "d").Day, format);
+                        return FormatNumber(At("d").Day, format);
 
                     case "hour":
-                        return FormatNumber(Shift(now, offset, unit, "h").Hour, format);
+                        return FormatNumber(At("h").Hour, format);
 
                     case "minute":
-                        return FormatNumber(Shift(now, offset, unit, "mi").Minute, format);
+                        return FormatNumber(At("mi").Minute, format);
 
                     case "second":
-                        return FormatNumber(Shift(now, offset, unit, "s").Second, format);
+                        return FormatNumber(At("s").Second, format);
 
                     case "dow":
-                        return FormatNumber(((int)Shift(now, offset, unit, "d").DayOfWeek + 6) % 7 + 1, format);
+                        return FormatNumber(((int)At("d").DayOfWeek + 6) % 7 + 1, format);
 
                     case "doy":
-                        return FormatNumber(Shift(now, offset, unit, "d").DayOfYear, format);
+                        return FormatNumber(At("d").DayOfYear, format);
 
                     case "week":
-                        return FormatNumber(
-                            ISOWeek.GetWeekOfYear(Shift(now, offset, unit, "w").Date), format);
+                        return FormatNumber(ISOWeek.GetWeekOfYear(At("w").Date), format);
 
                     case "daysinmonth":
-                        DateTime target = Shift(now, offset, unit, "mo");
+                        DateTime target = At("mo");
                         return FormatNumber(DateTime.DaysInMonth(target.Year, target.Month), format);
 
                     case "daysuntil":
@@ -472,6 +639,89 @@ namespace MyTaskTray.Services
                 // 書式が不正な場合などは、書いたままを残して気付けるようにする
                 return original;
             }
+        }
+
+        /// <summary>
+        /// 基準（<c>@…</c>）が指す日付を返す。解釈できなければ null。
+        ///
+        /// 基準は「展開の起点となる日付を差し替える」ものに限る。
+        /// 年度や四半期のような<em>派生</em>は、基準を 1 つしか書けない以上ここに置くと
+        /// <c>@sprint</c> と併用できなくなるため、名前側（またはオフセット）で表す。
+        ///
+        /// 基準そのものにオフセットは書けない（<c>{year@sprint-3mo}</c> の <c>-3mo</c> は結果に掛かる）。
+        /// 入れ子にすると読み手にも追えなくなるため、意図的に許していない。
+        /// </summary>
+        private static DateTime? ResolveBase(string baseName, ExpandContext context) => baseName switch
+        {
+            // 今日を含むスプリントの開始日。設定が無ければ使えない
+            "sprint" => context.Sprint?.StartOf(context.Now),
+
+            // クリップボードに入っている日付。読み取り手段が無い場面（テストなど）でも使えない
+            "clip" => context.HasClipboard ? TryParseClipboardDate(context.Clipboard) : null,
+
+            // 既存の日付の差し込みは、そのまま基準にもできる。
+            // {monthstart:ddd} のように書けるものも多いが、
+            // {week@monthstart} のように「数値の差し込みを今日以外に対して使う」のはこれでしか書けない
+            "date" or "today" or "datetime" or "now" => context.Now,
+            "monthstart" => MonthStart(context.Now),
+            "monthend" => MonthEnd(context.Now),
+            "weekstart" => WeekStart(context.Now),
+            "weekend" => WeekStart(context.Now).AddDays(6),
+
+            _ => null,
+        };
+
+        /// <summary>
+        /// クリップボードの文字列から日付を読み取る。読み取れなければ null。
+        ///
+        /// まず文字列全体を決まった表記として読み、駄目なら文中から日付らしい並びを 1 つ取り出す。
+        /// 「リリース日: 2026/08/15 まで」のような文字列をそのまま使えるようにするためで、
+        /// 年を 4 桁に限ることで電話番号のような並びは拾わないようにしている。
+        /// ただし 8 桁の数字は伝票番号と区別できないため、そこは避けられない曖昧さとして受け入れる。
+        /// </summary>
+        private static DateTime? TryParseClipboardDate(string value)
+        {
+            if (DateTime.TryParseExact(
+                    value.Trim(),
+                    ClipboardDateFormats,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out DateTime exact))
+            {
+                return exact;
+            }
+
+            Match m = ClipboardDateRegex().Match(value);
+            if (!m.Success)
+            {
+                return null;
+            }
+
+            if (m.Groups["ymd"].Success)
+            {
+                return DateTime.TryParseExact(
+                    m.Groups["ymd"].Value,
+                    "yyyyMMdd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out DateTime compact)
+                    ? compact
+                    : null;
+            }
+
+            int year = int.Parse(m.Groups["y"].Value, CultureInfo.InvariantCulture);
+            int month = int.Parse(m.Groups["mo"].Value, CultureInfo.InvariantCulture);
+            int day = int.Parse(m.Groups["d"].Value, CultureInfo.InvariantCulture);
+
+            // 2026-13-45 のような存在しない日付は、読み取れなかったものとして扱う
+            if (year < 1 || year > 9999
+                || month < 1 || month > 12
+                || day < 1 || day > DateTime.DaysInMonth(year, month))
+            {
+                return null;
+            }
+
+            return new DateTime(year, month, day);
         }
 
         /// <summary>
@@ -509,6 +759,15 @@ namespace MyTaskTray.Services
             if (hasOffset)
             {
                 throw new FormatException($"{{{name}}} にオフセットは指定できません。");
+            }
+        }
+
+        /// <summary>日付から作られない差し込みに基準（@…）が付いていたら誤りとして扱う。</summary>
+        private static void RejectBase(string name, bool hasBase)
+        {
+            if (hasBase)
+            {
+                throw new FormatException($"{{{name}}} に基準（@）は指定できません。");
             }
         }
 
@@ -652,7 +911,10 @@ namespace MyTaskTray.Services
         /// 単位を解釈できない場合（{date+1m} のような書き間違い）は例外にする。
         /// 黙って今日の日付を返すと、ユーザーが誤りに気付けないため。
         /// </summary>
-        private static DateTime Shift(DateTime value, int offset, string unit, string defaultUnit)
+        /// <param name="sprintDays">
+        /// 単位 <c>sp</c>（スプリント）1 つ分の日数。0 ならスプリントが未設定で、<c>sp</c> は使えない。
+        /// </param>
+        private static DateTime Shift(DateTime value, int offset, string unit, string defaultUnit, int sprintDays)
         {
             if (offset == 0 && string.IsNullOrEmpty(unit))
             {
@@ -669,8 +931,11 @@ namespace MyTaskTray.Services
                 "h" => value.AddHours(offset),
                 "mi" => value.AddMinutes(offset),
                 "s" => value.AddSeconds(offset),
+                "sp" => sprintDays >= 1
+                    ? value.AddDays((double)offset * sprintDays)
+                    : throw new FormatException("単位 'sp' を使うには、設定でスプリントの基準日と長さを決めてください。"),
                 _ => throw new FormatException(
-                    $"単位 '{unit}' を解釈できません。d 日 / w 週 / mo 月 / y 年 / h 時 / mi 分 / s 秒 が使えます。"),
+                    $"単位 '{unit}' を解釈できません。d 日 / w 週 / mo 月 / y 年 / h 時 / mi 分 / s 秒 / sp スプリント が使えます。"),
             };
         }
 

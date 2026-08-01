@@ -156,7 +156,7 @@ namespace MyTaskTray
             menu.Items.Add(exitItem);
 
             // 表示するたびに、差し込みを展開したツールチップを作り直す
-            menu.Opening += (_, _) => RefreshToolTips(menu.Items, CreateClipboardReader());
+            menu.Opening += (_, _) => RefreshToolTips(menu.Items, CreateClipboardReader(), _settings.Sprint);
 
             // ダークテーマのときだけ、メニューの色を合わせる
             TrayMenuTheme.Apply(menu);
@@ -307,7 +307,7 @@ namespace MyTaskTray
 
             ToolStripMenuItem menuItem = new(EscapeAmpersand(Truncate(label, MenuTextMaxLength)))
             {
-                ToolTipText = BuildToolTip(item, clipboard),
+                ToolTipText = BuildToolTip(item, clipboard, _settings.Sprint),
                 Tag = item,
             };
             menuItem.Click += (_, _) => CopyToClipboard(item);
@@ -315,7 +315,8 @@ namespace MyTaskTray
         }
 
         /// <summary>メニュー配下のツールチップを、現在時刻とクリップボードの内容で展開し直す。</summary>
-        private static void RefreshToolTips(ToolStripItemCollection items, Func<string> clipboard)
+        private static void RefreshToolTips(
+            ToolStripItemCollection items, Func<string> clipboard, SprintSchedule? sprint)
         {
             foreach (ToolStripItem item in items)
             {
@@ -326,22 +327,22 @@ namespace MyTaskTray
 
                 if (menuItem.Tag is ClipItem clip)
                 {
-                    menuItem.ToolTipText = BuildToolTip(clip, clipboard);
+                    menuItem.ToolTipText = BuildToolTip(clip, clipboard, sprint);
                 }
 
                 if (menuItem.HasDropDownItems)
                 {
-                    RefreshToolTips(menuItem.DropDownItems, clipboard);
+                    RefreshToolTips(menuItem.DropDownItems, clipboard, sprint);
                 }
             }
         }
 
         /// <summary>差し込みを含む場合は、展開後の値もツールチップに出す。</summary>
-        private static string BuildToolTip(ClipItem item, Func<string> clipboard)
+        private static string BuildToolTip(ClipItem item, Func<string> clipboard, SprintSchedule? sprint)
         {
             string raw = Truncate(item.Text, 200);
             string expanded = TemplateEngine.Expand(
-                item.Text, DateTime.Now, item.SequenceValue, clipboard);
+                item.Text, DateTime.Now, item.SequenceValue, clipboard, sprint);
 
             if (string.Equals(raw, Truncate(expanded, 200), StringComparison.Ordinal))
             {
@@ -369,8 +370,21 @@ namespace MyTaskTray
                 return;
             }
 
+            // {date@clip} のようにクリップボードを日付として読む項目で、日付として読めない場合。
+            // このまま展開すると差し込みが書いたまま残った文字列がコピーされ、
+            // 気付かずに貼り付けてしまう。空のときと同じく、コピーせずに知らせる
+            if (TemplateEngine.ContainsClipboardDate(item.Text)
+                && !TemplateEngine.CanParseClipboardDate(clipboard))
+            {
+                ToastWindow.ShowToast(
+                    "日付として読み取れません",
+                    $"「{TemplateEngine.ToSingleLine(clipboard.Trim(), 30)}」から日付を読み取れませんでした。"
+                        + "2026-08-15 のような形でコピーしてください");
+                return;
+            }
+
             string value = TemplateEngine.Expand(
-                item.Text, DateTime.Now, item.SequenceValue, () => clipboard);
+                item.Text, DateTime.Now, item.SequenceValue, () => clipboard, _settings.Sprint);
 
             if (!ClipboardService.TryCopy(value))
             {
@@ -401,6 +415,11 @@ namespace MyTaskTray
             {
                 item.AdvanceSequence();
                 TrySaveSettings();
+
+                // 設定画面は開いた時点の複製を持っているため、進んだ番号は自動では伝わらない。
+                // 保存時に突き合わせるので値は失われないが、開いているあいだ
+                // 画面の「次の番号」が実際と違う値のままになるので、その場で伝える
+                _settingsWindow?.NotifySequenceAdvanced(item.Id, item.SequenceValue);
             }
         }
 

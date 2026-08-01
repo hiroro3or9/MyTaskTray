@@ -72,6 +72,12 @@ namespace MyTaskTray
         /// <summary>保存して閉じた場合に true。</summary>
         public bool Saved { get; private set; }
 
+        /// <summary>
+        /// トレイからのコピーで連番が進んだことを受け取り、画面の「次の番号」に反映する。
+        /// 設定画面は設定の複製を持っているため、トレイ側の変化は自動では伝わらない。
+        /// </summary>
+        public void NotifySequenceAdvanced(string id, int value) => _vm.AdoptSequenceValue(id, value);
+
         private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == nameof(SettingsViewModel.NeedsPreviewRefresh))
@@ -402,6 +408,23 @@ namespace MyTaskTray
             }
 
             return current as ListBoxItem;
+        }
+
+        // ==================================================================
+        // スプリントの設定
+        // ==================================================================
+
+        private void OnOpenSprintSettings(object sender, RoutedEventArgs e)
+        {
+            SprintPopup.IsOpen = true;
+
+            Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    SprintAnchorBox.Focus();
+                    SprintAnchorBox.SelectAll();
+                }),
+                DispatcherPriority.Input);
         }
 
         // ==================================================================
@@ -758,10 +781,11 @@ namespace MyTaskTray
             // カテゴリ候補はフォーカスがポップアップの外（▾ ボタン）に残るため、
             // ポップアップ側の PreviewKeyDown には届かず、
             // ここで拾わないと IsCancel のキャンセルボタンが反応して設定画面ごと閉じてしまう。
-            if (e.Key == Key.Escape && (InsertPopup.IsOpen || CategoryPopup.IsOpen))
+            if (e.Key == Key.Escape && (InsertPopup.IsOpen || CategoryPopup.IsOpen || SprintPopup.IsOpen))
             {
                 InsertPopup.IsOpen = false;
                 CategoryPopup.IsOpen = false;
+                SprintPopup.IsOpen = false;
                 e.Handled = true;
                 return;
             }
