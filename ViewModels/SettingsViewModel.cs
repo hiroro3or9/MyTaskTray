@@ -9,6 +9,11 @@ using MyTaskTray.Services;
 
 namespace MyTaskTray.ViewModels
 {
+    public sealed record ClipboardMatchOption(
+        ClipboardMatchKind Kind,
+        string Name,
+        string Description);
+
     /// <summary>
     /// 設定画面のためのビューモデル。
     /// </summary>
@@ -66,6 +71,18 @@ namespace MyTaskTray.ViewModels
             KnownCategories = [];
             Placeholders = new ObservableCollection<PlaceholderRow>(
                 TemplateEngine.Placeholders.Select(p => new PlaceholderRow(p)));
+            ClipboardMatchOptions =
+            [
+                new(ClipboardMatchKind.Always, "常に表示", "従来どおり通常のメニューに表示します。"),
+                new(ClipboardMatchKind.HasText, "文字列がある", "クリップボードに文字列があるとき表示します。"),
+                new(ClipboardMatchKind.Date, "日付", "2026-08-15 などの日付を読み取れるとき表示します。"),
+                new(ClipboardMatchKind.Url, "Web URL", "http:// または https:// の URL のとき表示します。"),
+                new(ClipboardMatchKind.Number, "数値", "クリップボード全体を数値として読めるとき表示します。"),
+                new(ClipboardMatchKind.Json, "JSON", "JSON のオブジェクトまたは配列のとき表示します。"),
+                new(ClipboardMatchKind.FilePath, "Windowsのパス", "ドライブ文字または UNC で始まるパスのとき表示します。"),
+                new(ClipboardMatchKind.Email, "メールアドレス", "メールアドレスの形に一致するとき表示します。"),
+                new(ClipboardMatchKind.Regex, "正規表現", "指定した正規表現に一致するとき表示します。"),
+            ];
 
             _itemsView = CollectionViewSource.GetDefaultView(Items);
             _itemsView.Filter = o => o is ClipItem item && MatchesFilter(item);
@@ -89,6 +106,9 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>「差し込みを挿入」パネルに並べる一覧。</summary>
         public ObservableCollection<PlaceholderRow> Placeholders { get; }
+
+        /// <summary>スマートアクションの表示条件として選べる一覧。</summary>
+        public IReadOnlyList<ClipboardMatchOption> ClipboardMatchOptions { get; }
 
         /// <summary>
         /// ユーザーが画面上で連番の値を直接編集した項目の <see cref="ClipItem.Id"/>。
@@ -352,6 +372,7 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(EditorHint));
                 OnPropertyChanged(nameof(Preview));
                 OnPropertyChanged(nameof(NeedsPreviewRefresh));
+                OnPropertyChanged(nameof(ClipboardConditionStatus));
             }
         }
 
@@ -373,6 +394,41 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>選択項目が連番を使っているときだけ、連番の設定欄を出す。</summary>
         public bool IsSequenceVisible => IsItemEditable && SelectedItem!.UsesSequence;
+
+        /// <summary>選択項目のスマート条件の説明と、現在のクリップボードに対する判定。</summary>
+        public string ClipboardConditionStatus
+        {
+            get
+            {
+                if (SelectedItem is null || SelectedItem.IsSeparator)
+                {
+                    return string.Empty;
+                }
+
+                ClipboardMatchOption? option = ClipboardMatchOptions.FirstOrDefault(
+                    o => o.Kind == SelectedItem.ClipboardCondition);
+                if (option is null)
+                {
+                    return "保存されている表示条件を解釈できません。条件を選び直してください。";
+                }
+
+                if (SelectedItem.ClipboardCondition == ClipboardMatchKind.Always)
+                {
+                    return option.Description;
+                }
+
+                if (SelectedItem.ClipboardCondition == ClipboardMatchKind.Regex
+                    && !ClipboardMatcher.TryValidateRegex(SelectedItem.ClipboardPattern, out string error))
+                {
+                    return error;
+                }
+
+                bool matched = ClipboardMatcher.Match(SelectedItem, _clipboard).IsMatch;
+                return option.Description + (matched
+                    ? " 現在のクリップボードには一致しています。"
+                    : " 現在のクリップボードには一致していません。");
+            }
+        }
 
         /// <summary>
         /// プレビューを一定間隔で更新し続ける必要があるかどうか。
@@ -411,8 +467,17 @@ namespace MyTaskTray.ViewModels
                     return string.Empty;
                 }
 
+                ClipboardMatchResult match = SelectedItem.HasSmartCondition
+                    ? ClipboardMatcher.Match(SelectedItem, _clipboard)
+                    : ClipboardMatchResult.NoMatch;
                 return TemplateEngine.Expand(
-                    SelectedItem.Text, DateTime.Now, SelectedItem.SequenceValue, () => _clipboard, Sprint);
+                    SelectedItem.Text,
+                    DateTime.Now,
+                    SelectedItem.SequenceValue,
+                    () => _clipboard,
+                    Sprint,
+                    null,
+                    match.IsMatch ? match.Captures : null);
             }
         }
 
@@ -441,6 +506,7 @@ namespace MyTaskTray.ViewModels
 
             _clipboard = latest;
             OnPropertyChanged(nameof(Preview));
+            OnPropertyChanged(nameof(ClipboardConditionStatus));
         }
 
         /// <summary>差し込み一覧の「現在値」を今の時刻で作り直す。</summary>
@@ -546,6 +612,36 @@ namespace MyTaskTray.ViewModels
         /// <summary>保存が完了したことを伝える。</summary>
         public void MarkSaved() => IsDirty = false;
 
+        /// <summary>全項目の正規表現条件を保存前に検証する。</summary>
+        public bool TryValidateSmartConditions(out ClipItem? invalidItem, out string error)
+        {
+            foreach (ClipItem item in Items)
+            {
+                if (item.IsSeparator)
+                {
+                    continue;
+                }
+
+                if (!Enum.IsDefined(item.ClipboardCondition))
+                {
+                    invalidItem = item;
+                    error = "表示条件を解釈できません。条件を選び直してください。";
+                    return false;
+                }
+
+                if (item.ClipboardCondition == ClipboardMatchKind.Regex
+                    && !ClipboardMatcher.TryValidateRegex(item.ClipboardPattern, out error))
+                {
+                    invalidItem = item;
+                    return false;
+                }
+            }
+
+            invalidItem = null;
+            error = string.Empty;
+            return true;
+        }
+
         private bool MatchesFilter(ClipItem item)
         {
             if (!HasFilter)
@@ -561,7 +657,8 @@ namespace MyTaskTray.ViewModels
 
             return item.Name.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
                 || item.Text.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
-                || item.Category.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase);
+                || item.Category.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
+                || item.ClipboardPattern.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase);
         }
 
         private void OnItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -599,6 +696,8 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.Text):
                 case nameof(ClipItem.Category):
                 case nameof(ClipItem.IsSeparator):
+                case nameof(ClipItem.ClipboardCondition):
+                case nameof(ClipItem.ClipboardPattern):
                     IsDirty = true;
 
                     // 絞り込み中は表示件数が変わるため、件数の表示も作り直す
@@ -644,6 +743,12 @@ namespace MyTaskTray.ViewModels
                     OnPropertyChanged(nameof(Preview));
                     OnPropertyChanged(nameof(IsSequenceVisible));
                     OnPropertyChanged(nameof(NeedsPreviewRefresh));
+                    break;
+
+                case nameof(ClipItem.ClipboardCondition):
+                case nameof(ClipItem.ClipboardPattern):
+                    OnPropertyChanged(nameof(Preview));
+                    OnPropertyChanged(nameof(ClipboardConditionStatus));
                     break;
 
                 case nameof(ClipItem.SequenceValue):

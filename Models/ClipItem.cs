@@ -18,6 +18,8 @@ namespace MyTaskTray.Models
         private bool _isSeparator;
         private int _sequenceValue = InitialSequenceValue;
         private int _sequenceStep = 1;
+        private ClipboardMatchKind _clipboardCondition;
+        private string _clipboardPattern = string.Empty;
 
         /// <summary>
         /// 項目を識別する ID。連番カウンターの引き継ぎに使う。
@@ -52,7 +54,33 @@ namespace MyTaskTray.Models
                 nameof(DisplayName),
                 nameof(DisplayLabel),
                 nameof(TextPreview),
-                nameof(UsesSequence));
+                nameof(UsesSequence),
+                nameof(UsesInputs));
+        }
+
+        /// <summary>
+        /// クリップボードの内容に応じて項目を表示する条件。
+        /// <see cref="ClipboardMatchKind.Always"/> なら従来どおり常に表示する。
+        /// </summary>
+        public ClipboardMatchKind ClipboardCondition
+        {
+            get => _clipboardCondition;
+            set => Set(
+                ref _clipboardCondition,
+                value,
+                nameof(ClipboardCondition),
+                nameof(HasSmartCondition),
+                nameof(IsRegexCondition));
+        }
+
+        /// <summary>
+        /// <see cref="ClipboardCondition"/> が <see cref="ClipboardMatchKind.Regex"/> のときに使う正規表現。
+        /// 名前付きまたは番号付きキャプチャは <c>{match:名前}</c> で出力に差し込める。
+        /// </summary>
+        public string ClipboardPattern
+        {
+            get => _clipboardPattern;
+            set => Set(ref _clipboardPattern, value ?? string.Empty, nameof(ClipboardPattern));
         }
 
         /// <summary>
@@ -99,6 +127,18 @@ namespace MyTaskTray.Models
         /// <summary>コピー文字列が連番の差し込みを含むかどうか。</summary>
         [JsonIgnore]
         public bool UsesSequence => TemplateEngine.ContainsSequence(Text);
+
+        /// <summary><c>{input:名前}</c> による複数回キャプチャを使うかどうか。</summary>
+        [JsonIgnore]
+        public bool UsesInputs => TemplateEngine.GetInputNames(Text).Count > 0;
+
+        /// <summary>クリップボードに応じて表示されるスマートアクションかどうか。</summary>
+        [JsonIgnore]
+        public bool HasSmartCondition => ClipboardCondition != ClipboardMatchKind.Always;
+
+        /// <summary>スマートアクションの条件として正規表現を使うかどうか。</summary>
+        [JsonIgnore]
+        public bool IsRegexCondition => ClipboardCondition == ClipboardMatchKind.Regex;
 
         /// <summary>区切り線ではない通常の項目かどうか（テンプレートの切り替えに使う）。</summary>
         [JsonIgnore]
@@ -179,6 +219,8 @@ namespace MyTaskTray.Models
             IsSeparator = IsSeparator,
             SequenceValue = SequenceValue,
             SequenceStep = SequenceStep,
+            ClipboardCondition = ClipboardCondition,
+            ClipboardPattern = ClipboardPattern,
         };
 
         public event PropertyChangedEventHandler? PropertyChanged;

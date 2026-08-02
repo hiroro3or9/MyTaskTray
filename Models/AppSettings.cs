@@ -64,10 +64,22 @@ namespace MyTaskTray.Models
                 new() { Category = "日付", Name = "現在の日時", Text = "{datetime}" },
                 new() { Category = "日付", Name = "明日", Text = "{date+1}" },
                 new() { Category = "日付", Name = "今月末", Text = "{monthend}" },
+                new()
+                {
+                    Name = "コピーした日付を yyyyMMdd に",
+                    Text = "{date@clip:yyyyMMdd}",
+                    ClipboardCondition = ClipboardMatchKind.Date,
+                },
                 new() { IsSeparator = true },
                 new() { Category = "定型文", Name = "お礼", Text = "お世話になっております。ご対応ありがとうございました。" },
                 new() { Category = "定型文", Name = "確認依頼", Text = "ご確認のほど、よろしくお願いいたします。" },
                 new() { Category = "定型文", Name = "議事録の見出し", Text = "# {date:yyyy/MM/dd} 定例ミーティング 議事録" },
+                new()
+                {
+                    Category = "定型文",
+                    Name = "番号とタイトルを組み立てる",
+                    Text = "[{input:番号}] {input:タイトル}",
+                },
             ],
         };
 

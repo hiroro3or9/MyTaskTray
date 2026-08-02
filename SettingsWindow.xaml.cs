@@ -117,6 +117,7 @@ namespace MyTaskTray
         private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             _vm.RefreshCategories();
+            SmartActionExpander.IsExpanded = _vm.SelectedItem?.HasSmartCondition == true;
         }
 
         private void OnAddItem(object sender, RoutedEventArgs e)
@@ -591,6 +592,16 @@ namespace MyTaskTray
 
         private void OnCopyPreview(object sender, RoutedEventArgs e)
         {
+            if (_vm.SelectedItem is { UsesInputs: true })
+            {
+                MessageBox.Show(
+                    "{input:名前} を含む項目は、トレイメニューから選んでコピー操作を行うと完成します。",
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
             string value = _vm.Preview;
             if (string.IsNullOrEmpty(value))
             {
@@ -684,6 +695,32 @@ namespace MyTaskTray
                     {
                         SprintAnchorBox.Focus();
                         SprintAnchorBox.SelectAll();
+                    }),
+                    DispatcherPriority.Input);
+                return false;
+            }
+
+            if (!_vm.TryValidateSmartConditions(out ClipItem? invalidItem, out string conditionError))
+            {
+                MessageBox.Show(
+                    "スマートアクションの表示条件を保存できません。\n" + conditionError,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                ClearFilter();
+                _vm.SelectedItem = invalidItem;
+                if (invalidItem is not null)
+                {
+                    ItemsList.ScrollIntoView(invalidItem);
+                }
+
+                SmartActionExpander.IsExpanded = true;
+                Dispatcher.BeginInvoke(
+                    new Action(() =>
+                    {
+                        ClipboardPatternBox.Focus();
+                        ClipboardPatternBox.SelectAll();
                     }),
                     DispatcherPriority.Input);
                 return false;

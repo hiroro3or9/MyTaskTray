@@ -116,6 +116,8 @@ namespace MyTaskTray.Services
             new("{clip:line}", "クリップボード", "1 行目だけを取り出す"),
             new("{clip:upper}", "クリップボード", "大文字にする（lower で小文字）"),
             new("{clip:raw}", "クリップボード", "空白や改行も含めてそのまま"),
+            new("{input:名前}", "複数入力", "項目を選んだあと、名前ごとにコピーした値を順番に差し込む"),
+            new("{match:名前}", "スマートアクション", "正規表現などの表示条件で取り出した値を差し込む"),
             new("{date@clip:yyyyMMdd}", "クリップボードの日付",
                 "コピーしてある日付を別の書式にする（2026/08/15 → 20260815）"),
             new("{date@clip:yyyy年M月d日}", "クリップボードの日付", "和文の日付にする"),
@@ -179,7 +181,12 @@ namespace MyTaskTray.Services
         /// 同じ展開の中では何度使っても同じ値になるように覚えておく。
         /// </summary>
         private sealed class ExpandContext(
-            DateTime now, int sequenceValue, Func<string>? clipboard, SprintSchedule? sprint)
+            DateTime now,
+            int sequenceValue,
+            Func<string>? clipboard,
+            SprintSchedule? sprint,
+            IReadOnlyDictionary<string, string>? inputs,
+            IReadOnlyDictionary<string, string>? matches)
         {
             private string? _clipboard;
 
@@ -194,6 +201,10 @@ namespace MyTaskTray.Services
             public bool HasClipboard { get; } = clipboard is not null;
 
             public string Clipboard => _clipboard ??= clipboard?.Invoke() ?? string.Empty;
+
+            public IReadOnlyDictionary<string, string>? Inputs { get; } = inputs;
+
+            public IReadOnlyDictionary<string, string>? Matches { get; } = matches;
         }
 
         /// <summary>差し込みを展開した文字列を返す。</summary>
@@ -219,7 +230,97 @@ namespace MyTaskTray.Services
         /// </param>
         public static string Expand(
             string template, DateTime now, int sequenceValue, Func<string>? clipboard, SprintSchedule? sprint)
-            => Expand(template, new ExpandContext(now, sequenceValue, clipboard, sprint), 0, false);
+            => Expand(template, now, sequenceValue, clipboard, sprint, null, null);
+
+        /// <summary>
+        /// 差し込みを展開する。<paramref name="inputs"/> は <c>{input:名前}</c>、
+        /// <paramref name="matches"/> は <c>{match:名前}</c> から参照される。
+        /// </summary>
+        public static string Expand(
+            string template,
+            DateTime now,
+            int sequenceValue,
+            Func<string>? clipboard,
+            SprintSchedule? sprint,
+            IReadOnlyDictionary<string, string>? inputs,
+            IReadOnlyDictionary<string, string>? matches)
+            => Expand(
+                template,
+                new ExpandContext(now, sequenceValue, clipboard, sprint, inputs, matches),
+                0,
+                false);
+
+        /// <summary>
+        /// テンプレートに現れる <c>{input:名前}</c> の名前を、最初に現れた順で返す。
+        /// 同じ名前は大文字小文字を区別せず 1 回だけ返す。
+        /// </summary>
+        public static IReadOnlyList<string> GetInputNames(string template)
+        {
+            List<string> names = [];
+            HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+            CollectInputNames(template, names, seen, 0);
+            return names;
+        }
+
+        private static void CollectInputNames(
+            string template, List<string> names, HashSet<string> seen, int depth)
+        {
+            if (string.IsNullOrEmpty(template) || depth > MaxDepth)
+            {
+                return;
+            }
+
+            for (int i = 0; i < template.Length; i++)
+            {
+                if (template[i] != '{')
+                {
+                    continue;
+                }
+
+                if (i + 1 < template.Length && template[i + 1] == '{')
+                {
+                    i++;
+                    continue;
+                }
+
+                int close = FindClosingBrace(template, i);
+                if (close < 0)
+                {
+                    continue;
+                }
+
+                string inner = template[(i + 1)..close];
+                if (TryGetNamedValue(inner, "input", out string inputName))
+                {
+                    if (seen.Add(inputName))
+                    {
+                        names.Add(inputName);
+                    }
+                }
+                else
+                {
+                    // {calc:{input:金額}*1.1} のような入れ子も拾う。
+                    CollectInputNames(inner, names, seen, depth + 1);
+                }
+
+                i = close;
+            }
+        }
+
+        private static bool TryGetNamedValue(string inner, string tokenName, out string value)
+        {
+            string prefix = tokenName + ":";
+            string trimmed = inner.Trim();
+            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                value = string.Empty;
+                return false;
+            }
+
+            value = trimmed[prefix.Length..].Trim();
+            return value.Length is >= 1 and <= 80
+                && value.IndexOfAny(['{', '}', '\r', '\n']) < 0;
+        }
 
         /// <summary>
         /// 差し込みを展開する。計算式は中に別の差し込みを書けるため、
@@ -530,6 +631,30 @@ namespace MyTaskTray.Services
             {
                 switch (name)
                 {
+                    case "input":
+                        RejectBase(name, hasBase);
+                        RejectOffset(name, hasOffset);
+                        if (!TryGetNamedValue(trimmed, "input", out string inputName)
+                            || context.Inputs is null
+                            || !context.Inputs.TryGetValue(inputName, out string? inputValue))
+                        {
+                            return original;
+                        }
+
+                        return inputValue;
+
+                    case "match":
+                        RejectBase(name, hasBase);
+                        RejectOffset(name, hasOffset);
+                        if (!TryGetNamedValue(trimmed, "match", out string matchName)
+                            || context.Matches is null
+                            || !context.Matches.TryGetValue(matchName, out string? matchValue))
+                        {
+                            return original;
+                        }
+
+                        return matchValue;
+
                     case "date":
                         return FormatDate(At("d"), format, DefaultDateFormat);
 

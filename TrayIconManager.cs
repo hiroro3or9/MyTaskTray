@@ -19,6 +19,13 @@ namespace MyTaskTray
         private const string ExitSeparatorName = "ExitSeparator";
         private const string ExitMenuItemName = "ExitMenuItem";
 
+        private static readonly IReadOnlyDictionary<string, string> EmptyCaptures
+            = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        private readonly record struct MenuEntry(
+            ClipItem Item,
+            IReadOnlyDictionary<string, string> Captures);
+
         // NotifyIcon が右クリック時に使っている内部処理。左クリックでも同じ見せ方をするために借りる。
         // 非公開メンバーなので将来の .NET で無くなる可能性があるが、
         // 取得は 1 度だけ試し、見つからなければ ShowTrayMenu() が手動表示に切り替える。
@@ -30,7 +37,9 @@ namespace MyTaskTray
         private AppSettings _settings;
         private SettingsWindow? _settingsWindow;
         private GlobalHotKey? _menuHotKey;
+        private ClipboardCaptureSession? _captureSession;
         private Icon? _icon;
+        private bool _hideExitWhileMenuOpen;
         private bool _disposed;
 
         public TrayIconManager()
@@ -106,6 +115,7 @@ namespace MyTaskTray
         /// <summary>設定を読み直してメニューを作り直す。</summary>
         public void ReloadSettings()
         {
+            CancelCapture(showToast: false, rebuildMenu: false);
             _settings = SettingsStore.Load();
             RebuildMenu();
             RegisterMenuHotKey();
@@ -161,7 +171,15 @@ namespace MyTaskTray
 
             if (atCursor)
             {
-                HideExitItemsUntilClosed(menu);
+                _hideExitWhileMenuOpen = true;
+
+                void RestoreExitItems(object? sender, ToolStripDropDownClosedEventArgs e)
+                {
+                    menu.Closed -= RestoreExitItems;
+                    _hideExitWhileMenuOpen = false;
+                }
+
+                menu.Closed += RestoreExitItems;
             }
 
             // ホットキーでは作業中の画面にあるカーソル位置へ表示する。
@@ -176,35 +194,6 @@ namespace MyTaskTray
                 // ホットキーを押した手をマウスへ移さず、矢印キーと Enter で選べるようにする
                 SelectFirstEnabledItem(menu.Items);
             }
-        }
-
-        /// <summary>
-        /// ホットキーから開いたメニューでは、誤操作でアプリを終了しないよう終了項目を隠す。
-        /// 同じメニューをトレイから開いたときには表示されるよう、閉じた時点で元へ戻す。
-        /// </summary>
-        private static void HideExitItemsUntilClosed(ContextMenuStrip menu)
-        {
-            ToolStripItem? separator = menu.Items[ExitSeparatorName];
-            ToolStripItem? exitItem = menu.Items[ExitMenuItemName];
-            if (exitItem is null)
-            {
-                return;
-            }
-
-            separator?.Available = false;
-
-            exitItem.Available = false;
-
-            void RestoreExitItems(object? sender, ToolStripDropDownClosedEventArgs e)
-            {
-                menu.Closed -= RestoreExitItems;
-
-                separator?.Available = true;
-
-                exitItem.Available = true;
-            }
-
-            menu.Closed += RestoreExitItems;
         }
 
         private static void SelectFirstEnabledItem(ToolStripItemCollection items)
@@ -236,10 +225,87 @@ namespace MyTaskTray
                 ShowImageMargin = false,
             };
 
-            BuildClipItems(menu.Items);
+            // スマートアクションは現在のクリップボードに応じて変わるため、
+            // メニューを表示する直前に内容を組み立て直す。
+            menu.Opening += (_, _) => PopulateMenu(menu);
+            PopulateMenu(menu);
+
+            ContextMenuStrip? old = _notifyIcon.ContextMenuStrip;
+            _notifyIcon.ContextMenuStrip = menu;
+            DisposeMenu(old);
+
+            _notifyIcon.Text = BuildIconToolTip();
+        }
+
+        /// <summary>現在のクリップボードとキャプチャ状態からメニュー内容を作る。</summary>
+        private void PopulateMenu(ContextMenuStrip menu)
+        {
+            ClearAndDispose(menu.Items);
+
+            Func<string> clipboard = CreateClipboardReader();
+
+            if (_captureSession is not null)
+            {
+                ClipboardCaptureProgress progress = _captureSession.Progress;
+                menu.Items.Add(new ToolStripMenuItem(
+                    $"入力待ち: {progress.CurrentName} ({progress.CapturedCount + 1}/{progress.TotalCount})")
+                {
+                    Enabled = false,
+                });
+
+                ToolStripMenuItem cancelCapture = new("複数入力をキャンセル(&C)");
+                cancelCapture.Click += (_, _) => CancelCapture(showToast: true, rebuildMenu: true);
+                menu.Items.Add(cancelCapture);
+                menu.Items.Add(new ToolStripSeparator());
+            }
+
+            List<MenuEntry> regular = [];
+            List<MenuEntry> smart = [];
+
+            foreach (ClipItem item in _settings.Items)
+            {
+                if (item.IsSeparator || item.ClipboardCondition == ClipboardMatchKind.Always)
+                {
+                    regular.Add(new MenuEntry(item, EmptyCaptures));
+                    continue;
+                }
+
+                ClipboardMatchResult result = ClipboardMatcher.Match(item, clipboard());
+                if (result.IsMatch)
+                {
+                    smart.Add(new MenuEntry(item, result.Captures));
+                }
+            }
+
+            if (smart.Count > 0)
+            {
+                ToolStripMenuItem smartParent = new("この内容でできること")
+                {
+                    ToolTipText = "現在のクリップボードに合うスマートアクション",
+                };
+                if (smartParent.DropDown is ToolStripDropDownMenu smartDropDown)
+                {
+                    smartDropDown.ShowImageMargin = false;
+                }
+
+                BuildClipItems(smartParent.DropDownItems, smart, clipboard);
+                TrimEdgeSeparators(smartParent.DropDownItems);
+                menu.Items.Add(smartParent);
+                menu.Items.Add(new ToolStripSeparator());
+            }
+
+            if (regular.Count == 0 && smart.Count == 0 && _settings.Items.Count > 0)
+            {
+                menu.Items.Add(new ToolStripMenuItem("(現在の内容に合うアクションはありません)")
+                {
+                    Enabled = false,
+                });
+            }
+
+            BuildClipItems(menu.Items, regular, clipboard);
 
             // 先頭・末尾・連続した区切り線を取り除く。
-            // これをしないと、下で足す区切り線と重なって線が二重に描かれる。
+            // キャプチャ欄やスマートアクションとの境界は残したいため、通常項目を足したあとに整理する。
             TrimEdgeSeparators(menu.Items);
 
             if (menu.Items.Count > 0)
@@ -258,17 +324,14 @@ namespace MyTaskTray
             exitItem.Click += (_, _) => ExitApplication();
             menu.Items.Add(exitItem);
 
-            // 表示するたびに、差し込みを展開したツールチップを作り直す
-            menu.Opening += (_, _) => RefreshToolTips(menu.Items, CreateClipboardReader(), _settings.Sprint);
+            if (_hideExitWhileMenuOpen)
+            {
+                menu.Items[ExitSeparatorName]?.Available = false;
+                menu.Items[ExitMenuItemName]?.Available = false;
+            }
 
-            // ダークテーマのときだけ、メニューの色を合わせる
+            // 動的に追加したサブメニューにも現在の配色を適用する。
             TrayMenuTheme.Apply(menu);
-
-            ContextMenuStrip? old = _notifyIcon.ContextMenuStrip;
-            _notifyIcon.ContextMenuStrip = menu;
-            DisposeMenu(old);
-
-            _notifyIcon.Text = BuildIconToolTip();
         }
 
         /// <summary>
@@ -325,30 +388,38 @@ namespace MyTaskTray
         /// 設定の項目順を保ちながら、カテゴリごとにサブメニューへ振り分ける。
         /// 同じカテゴリが離れた位置に現れても、最初に登場した位置のサブメニューにまとめる。
         /// </summary>
-        private void BuildClipItems(ToolStripItemCollection target)
+        private void BuildClipItems(
+            ToolStripItemCollection target,
+            IEnumerable<MenuEntry> entries,
+            Func<string> clipboard)
         {
-            if (_settings.Items.Count == 0)
+            List<MenuEntry> source = [.. entries];
+            if (source.Count == 0)
             {
                 // 設定ファイルを読めていない場合、「項目がありません」は事実と違ううえ、
                 // 追加して保存すると元の設定を失うため、そうと分かる文言にする
-                ToolStripMenuItem empty = new(_settings.IsFallback
-                    ? "(設定を読み込めませんでした)"
-                    : "(項目がありません。設定から追加してください)")
+                if (_settings.Items.Count == 0)
                 {
-                    Enabled = false,
-                };
-                target.Add(empty);
+                    ToolStripMenuItem empty = new(_settings.IsFallback
+                        ? "(設定を読み込めませんでした)"
+                        : "(項目がありません。設定から追加してください)")
+                    {
+                        Enabled = false,
+                    };
+                    target.Add(empty);
+                }
+
                 return;
             }
 
             Dictionary<string, ToolStripMenuItem> categories = new(StringComparer.Ordinal);
-            Func<string> clipboard = CreateClipboardReader();
 
-            foreach (ClipItem item in _settings.Items)
+            foreach (MenuEntry menuEntry in source)
             {
+                ClipItem item = menuEntry.Item;
                 ToolStripItem entry = item.IsSeparator
                     ? new ToolStripSeparator()
-                    : CreateClipMenuItem(item, clipboard);
+                    : CreateClipMenuItem(item, clipboard, menuEntry.Captures);
 
                 // 「日付」と「日付 」（末尾に空白）が別のサブメニューになってしまわないよう、
                 // 見た目で区別できない前後の空白は無視して同じカテゴリとして扱う
@@ -398,7 +469,10 @@ namespace MyTaskTray
             return () => cached ??= ClipboardService.GetText();
         }
 
-        private ToolStripMenuItem CreateClipMenuItem(ClipItem item, Func<string> clipboard)
+        private ToolStripMenuItem CreateClipMenuItem(
+            ClipItem item,
+            Func<string> clipboard,
+            IReadOnlyDictionary<string, string> captures)
         {
             string label = string.IsNullOrWhiteSpace(item.Name) ? item.Text : item.Name;
 
@@ -410,58 +484,155 @@ namespace MyTaskTray
 
             ToolStripMenuItem menuItem = new(EscapeAmpersand(Truncate(label, MenuTextMaxLength)))
             {
-                ToolTipText = BuildToolTip(item, clipboard, _settings.Sprint),
+                ToolTipText = BuildToolTip(item, clipboard, _settings.Sprint, captures),
                 Tag = item,
             };
-            menuItem.Click += (_, _) => CopyToClipboard(item);
+            menuItem.Click += (_, _) => ActivateClipItem(item, clipboard, captures);
             return menuItem;
         }
 
-        /// <summary>メニュー配下のツールチップを、現在時刻とクリップボードの内容で展開し直す。</summary>
-        private static void RefreshToolTips(
-            ToolStripItemCollection items, Func<string> clipboard, SprintSchedule? sprint)
-        {
-            foreach (ToolStripItem item in items)
-            {
-                if (item is not ToolStripMenuItem menuItem)
-                {
-                    continue;
-                }
-
-                if (menuItem.Tag is ClipItem clip)
-                {
-                    menuItem.ToolTipText = BuildToolTip(clip, clipboard, sprint);
-                }
-
-                if (menuItem.HasDropDownItems)
-                {
-                    RefreshToolTips(menuItem.DropDownItems, clipboard, sprint);
-                }
-            }
-        }
-
         /// <summary>差し込みを含む場合は、展開後の値もツールチップに出す。</summary>
-        private static string BuildToolTip(ClipItem item, Func<string> clipboard, SprintSchedule? sprint)
+        private static string BuildToolTip(
+            ClipItem item,
+            Func<string> clipboard,
+            SprintSchedule? sprint,
+            IReadOnlyDictionary<string, string> captures)
         {
             string raw = Truncate(item.Text, 200);
             string expanded = TemplateEngine.Expand(
-                item.Text, DateTime.Now, item.SequenceValue, clipboard, sprint);
+                item.Text, DateTime.Now, item.SequenceValue, clipboard, sprint, null, captures);
+
+            IReadOnlyList<string> inputNames = TemplateEngine.GetInputNames(item.Text);
+            string inputHint = inputNames.Count == 0
+                ? string.Empty
+                : "\n入力: " + string.Join(" → ", inputNames);
 
             if (string.Equals(raw, Truncate(expanded, 200), StringComparison.Ordinal))
             {
-                return raw;
+                return raw + inputHint;
             }
 
-            return raw + "\n→ " + Truncate(expanded, 200);
+            return raw + "\n→ " + Truncate(expanded, 200) + inputHint;
         }
 
-        private void CopyToClipboard(ClipItem item)
+        /// <summary>
+        /// 入力のない項目はそのままコピーし、<c>{input:名前}</c> があればキャプチャを開始する。
+        /// スマートアクションの判定に使ったクリップボードとキャプチャは、完了まで同じ値を保持する。
+        /// </summary>
+        private void ActivateClipItem(
+            ClipItem item,
+            Func<string> clipboard,
+            IReadOnlyDictionary<string, string> captures)
+        {
+            IReadOnlyList<string> inputNames = TemplateEngine.GetInputNames(item.Text);
+            if (inputNames.Count == 0)
+            {
+                CopyToClipboard(item, clipboard, null, captures);
+                return;
+            }
+
+            bool preserveClipboard = item.HasSmartCondition || TemplateEngine.ContainsClipboard(item.Text);
+            string sourceClipboard = preserveClipboard ? clipboard() : string.Empty;
+            StartCapture(item, inputNames, sourceClipboard, captures);
+        }
+
+        private void StartCapture(
+            ClipItem item,
+            IReadOnlyList<string> inputNames,
+            string sourceClipboard,
+            IReadOnlyDictionary<string, string> captures)
+        {
+            CancelCapture(showToast: false, rebuildMenu: false);
+
+            ClipboardCaptureSession? session = null;
+            session = new ClipboardCaptureSession(
+                inputNames,
+                progressed: progress =>
+                {
+                    if (!ReferenceEquals(_captureSession, session))
+                    {
+                        return;
+                    }
+
+                    RebuildMenu();
+                    ShowCapturePrompt(progress, "入力を受け取りました");
+                },
+                completed: inputs =>
+                {
+                    if (!ReferenceEquals(_captureSession, session))
+                    {
+                        return;
+                    }
+
+                    _captureSession = null;
+                    CopyToClipboard(item, () => sourceClipboard, inputs, captures);
+                    RebuildMenu();
+                },
+                timedOut: () =>
+                {
+                    if (!ReferenceEquals(_captureSession, session))
+                    {
+                        return;
+                    }
+
+                    _captureSession = null;
+                    RebuildMenu();
+                    ToastWindow.ShowToast("複数入力をキャンセルしました", "2 分間コピーがなかったため終了しました");
+                },
+                rejected: name => ToastWindow.ShowToast(
+                    $"入力: {name}",
+                    "文字列をコピーしてください。空またはテキスト以外の内容は入力として使えません"));
+
+            _captureSession = session;
+            if (!session.Start())
+            {
+                _captureSession = null;
+                ToastWindow.ShowToast(
+                    "複数入力を開始できません",
+                    "Windows のクリップボード変更通知を受け取れませんでした");
+                return;
+            }
+
+            RebuildMenu();
+            ShowCapturePrompt(session.Progress, "複数入力を開始しました");
+        }
+
+        private static void ShowCapturePrompt(ClipboardCaptureProgress progress, string title)
+        {
+            ToastWindow.ShowToast(
+                title,
+                $"{progress.CapturedCount + 1}/{progress.TotalCount}: "
+                    + $"「{progress.CurrentName}」に入れる文字列をコピーしてください");
+        }
+
+        private void CancelCapture(bool showToast, bool rebuildMenu)
+        {
+            ClipboardCaptureSession? session = _captureSession;
+            _captureSession = null;
+            session?.Dispose();
+
+            if (rebuildMenu && !_disposed)
+            {
+                RebuildMenu();
+            }
+
+            if (showToast && session is not null)
+            {
+                ToastWindow.ShowToast("複数入力をキャンセルしました", string.Empty);
+            }
+        }
+
+        private void CopyToClipboard(
+            ClipItem item,
+            Func<string> clipboardReader,
+            IReadOnlyDictionary<string, string>? inputs,
+            IReadOnlyDictionary<string, string> captures)
         {
             // クリップボードを開くと他アプリのコピー操作を妨げるうえ、ロックされていると
             // 再試行のあいだ操作が止まる。{clip} を使う項目でだけ読みに行く。
             // その場合はコピーで上書きされる前の内容が必要なので、展開より先に読む
             bool usesClipboard = TemplateEngine.ContainsClipboard(item.Text);
-            string clipboard = usesClipboard ? ClipboardService.GetText() : string.Empty;
+            string clipboard = usesClipboard ? clipboardReader() : string.Empty;
 
             // {clip} を使う項目でクリップボードが空だと、差し込む先が抜けた文字列になってしまう。
             // 気付かずに貼り付けてしまわないよう、コピーせずに知らせる
@@ -487,7 +658,13 @@ namespace MyTaskTray
             }
 
             string value = TemplateEngine.Expand(
-                item.Text, DateTime.Now, item.SequenceValue, () => clipboard, _settings.Sprint);
+                item.Text,
+                DateTime.Now,
+                item.SequenceValue,
+                () => clipboard,
+                _settings.Sprint,
+                inputs,
+                captures);
 
             if (!ClipboardService.TryCopy(value))
             {
@@ -649,6 +826,15 @@ namespace MyTaskTray
             }
         }
 
+        /// <summary>動的に作り直す前のメニュー項目を、イベントハンドラーごと破棄する。</summary>
+        private static void ClearAndDispose(ToolStripItemCollection items)
+        {
+            while (items.Count > 0)
+            {
+                RemoveAndDispose(items, items.Count - 1);
+            }
+        }
+
         /// <summary>取り除いた項目はメニューから外れても残るため、明示的に破棄する。</summary>
         private static void RemoveAndDispose(ToolStripItemCollection items, int index)
         {
@@ -728,6 +914,7 @@ namespace MyTaskTray
 
             _disposed = true;
             ThemeManager.ThemeChanged -= OnThemeChanged;
+            CancelCapture(showToast: false, rebuildMenu: false);
             _menuHotKey?.Dispose();
             _menuHotKey = null;
             _notifyIcon.MouseUp -= OnIconMouseUp;

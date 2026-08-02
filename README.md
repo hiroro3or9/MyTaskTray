@@ -48,6 +48,83 @@
 同じカテゴリ名の項目は、最初にそのカテゴリが登場した位置のサブメニューにまとめられます。
 入力欄の右の「▾」から、すでに使っているカテゴリを選べます。
 
+## スマートアクション
+
+項目の「スマートアクション」を開いて表示条件を指定すると、その項目は通常の一覧には出ず、
+現在のクリップボードが条件に合ったときだけ、メニュー先頭の「この内容でできること」に表示されます。
+メニューを開くたびに現在の内容で判定し直します。
+
+| 表示条件 | 表示されるとき |
+| --- | --- |
+| 常に表示 | 従来どおり通常のメニューに常に表示 |
+| 文字列がある | 空白以外の文字列がコピーされている |
+| 日付 | `2026-08-15` や `20260815` など、クリップボードの日付として読める |
+| Web URL | `http://` または `https://` の URL |
+| 数値 | クリップボード全体を数値として読める |
+| JSON | JSON のオブジェクトまたは配列として読める |
+| Windowsのパス | ドライブ文字または UNC で始まるパス |
+| メールアドレス | メールアドレスの形に一致する |
+| 正規表現 | 指定した正規表現に一致する |
+
+判定で取り出した値は `{match:名前}` でコピー文字列に差し込めます。
+どの条件でも元の文字列は `{match:value}`、正規表現では `{match:1}` などの番号付きキャプチャと
+`{match:id}` などの名前付きキャプチャを使用できます。
+
+```text
+表示条件: 正規表現
+正規表現: /issues/(?<id>\d+)
+コピー文字列: feature/issue-{match:id}
+
+クリップボード: https://example.test/issues/4329
+→ feature/issue-4329
+```
+
+組み込み条件には次の追加値があります。
+
+| 条件 | 値 |
+| --- | --- |
+| Web URL | `{match:scheme}` `{match:host}` `{match:path}` `{match:query}` |
+| 数値 | `{match:number}` |
+| Windowsのパス | `{match:name}` `{match:directory}` `{match:extension}` |
+| メールアドレス | `{match:local}` `{match:domain}` |
+
+正規表現が不正な場合は保存を中止して入力欄を表示します。照合は長時間メニューを止めないよう
+200 ミリ秒で打ち切り、その場合は条件に一致しなかったものとして扱います。
+
+## 複数回キャプチャ
+
+コピー文字列に `{input:名前}` を書くと、項目を選んだあとに複数回のコピー操作から値を集められます。
+
+```text
+[{input:番号}] {input:タイトル}
+```
+
+この項目を選ぶと「番号に入れる文字列をコピーしてください」と通知されます。
+番号をコピーすると次はタイトルを待ち、すべてそろった時点で次のような結果をコピーします。
+
+```text
+[4329] ログイン画面が表示されない
+```
+
+- 入力はコピー文字列に最初に現れた順。同じ名前を複数回書いた場合は 1 回だけ取得し、同じ値を使う
+- 前後の空白は取り除くが、途中の改行は保持する
+- 入力値はメモリ上だけに置き、設定ファイルや履歴には保存しない
+- 2 分間コピーがなければ自動でキャンセルする
+- キャプチャ中はトレイメニューに進行状況と「複数入力をキャンセル」を表示する
+- 空またはテキスト以外をコピーした場合はその入力を受け取らず、もう一度待つ
+- 設定画面のプレビューでは `{input:名前}` のまま表示し、「コピーして試す」はトレイからの操作を案内する
+
+スマートアクションとも組み合わせられます。スマートアクションを表示した元のクリップボードは、
+その後の入力コピーで上書きされても、完成まで `{clip}` / `{match:名前}` 用に保持されます。
+
+```text
+表示条件: /issues/(?<id>\d+)
+コピー文字列: feature/{match:id}-{input:短い名前}
+
+Issue URLをコピー → アクションを選択 → 短い名前をコピー
+→ feature/4329-login-error
+```
+
 ## 差し込み（日付などの計算値）
 
 コピー文字列には `{...}` 形式の差し込みを書けます。コピーした瞬間に評価されるので、固定文と混ぜて使えます。
@@ -125,6 +202,8 @@
 | `{clip:line}` | 1 行目だけ | |
 | `{clip:upper}` / `{clip:lower}` | 大文字 / 小文字にする | |
 | `{clip:raw}` | 空白・改行も含めてそのまま | |
+| `{input:名前}` | 項目を選んだあと、名前ごとにコピーした値を順番に取得 | |
+| `{match:名前}` | スマートアクションの表示条件で取り出した値 | |
 | `{date}` | 今日の日付 | `2026/07/30` |
 | `{date:yyyyMMdd}` | 書式を指定した日付 | `20260730` |
 | `{date+1}` / `{date-1}` | 明日 / 昨日 | `2026/07/31` |
@@ -359,6 +438,8 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
       "Text": "example@example.com",
       "Category": "",
       "IsSeparator": false,
+      "ClipboardCondition": "Always",
+      "ClipboardPattern": "",
       "SequenceValue": 1,
       "SequenceStep": 1
     },
@@ -379,6 +460,8 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 | `Text` | クリップボードにコピーする文字列（改行・差し込み可） |
 | `Category` | サブメニュー名。空ならトップレベル |
 | `IsSeparator` | `true` で区切り線として表示 |
+| `ClipboardCondition` | スマートアクションの表示条件。`Always` / `HasText` / `Date` / `Url` / `Number` / `Json` / `FilePath` / `Email` / `Regex` |
+| `ClipboardPattern` | `ClipboardCondition` が `Regex` のときに使う正規表現 |
 | `SequenceValue` | `{seq}` が次に出力する番号 |
 | `SequenceStep` | 連番の増分 |
 
@@ -415,8 +498,11 @@ Themes/Dark.xaml            ダークテーマの色
 Themes/Controls.xaml        コントロールの見た目
 Models/ClipItem.cs          コピー項目
 Models/AppSettings.cs       設定全体
+Models/ClipboardMatchKind.cs スマートアクションの表示条件
 Services/SettingsStore.cs   JSON の読み書き
 Services/ClipboardService.cs クリップボード操作
+Services/ClipboardMatcher.cs スマートアクションの表示条件を判定
+Services/ClipboardCaptureSession.cs 複数入力中だけクリップボード変更を監視
 Services/ExpressionEvaluator.cs  {calc:…} の数式エンジン
 Services/TemplateEngine.cs  差し込み（{date} など）の展開
 Services/ThemeManager.cs    Windows の外観設定への追従

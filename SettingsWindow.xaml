@@ -38,6 +38,14 @@
                             <TextBlock Text="連番" Style="{StaticResource SeqBadgeText}" />
                         </Border>
                         <Border Style="{StaticResource Badge}"
+                                Visibility="{Binding UsesInputs, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="入力" Style="{StaticResource BadgeText}" />
+                        </Border>
+                        <Border Style="{StaticResource Badge}"
+                                Visibility="{Binding HasSmartCondition, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="スマート" Style="{StaticResource BadgeText}" />
+                        </Border>
+                        <Border Style="{StaticResource Badge}"
                                 Visibility="{Binding HasCategory, Converter={StaticResource BoolToVis}}">
                             <TextBlock Text="{Binding Category}" Style="{StaticResource BadgeText}"
                                        MaxWidth="90" TextTrimming="CharacterEllipsis" />
@@ -152,6 +160,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" MinHeight="100" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -183,7 +192,45 @@
                             </Grid>
                         </StackPanel>
 
-                        <Grid Grid.Row="3" Margin="0,0,0,4">
+                        <!-- スマートアクションの条件 -->
+                        <Expander x:Name="SmartActionExpander" Grid.Row="3" Margin="0,0,0,10"
+                                  Foreground="{DynamicResource Brush.Text}"
+                                  Header="スマートアクション（クリップボードに応じて表示）">
+                            <Border Margin="0,6,0,0" Padding="10,9" CornerRadius="6"
+                                    Background="{DynamicResource Brush.Surface.Alt}"
+                                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                    TextElement.Foreground="{DynamicResource Brush.Text}">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="180" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="表示条件" Margin="0,0,10,0"
+                                                   VerticalAlignment="Center" />
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding ClipboardMatchOptions}"
+                                                  DisplayMemberPath="Name" SelectedValuePath="Kind"
+                                                  SelectedValue="{Binding SelectedItem.ClipboardCondition, Mode=TwoWay}" />
+                                    </Grid>
+
+                                    <StackPanel Margin="0,8,0,0"
+                                                Visibility="{Binding SelectedItem.IsRegexCondition, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="正規表現" Style="{StaticResource FieldLabel}" />
+                                        <TextBox x:Name="ClipboardPatternBox" FontFamily="Consolas, Yu Gothic UI"
+                                                 Text="{Binding SelectedItem.ClipboardPattern, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="名前付きキャプチャは {match:名前} でコピー文字列に差し込めます" />
+                                    </StackPanel>
+
+                                    <TextBlock Margin="0,7,0,0" TextWrapping="Wrap" FontSize="11"
+                                               Foreground="{DynamicResource Brush.Text.Secondary}"
+                                               Text="{Binding ClipboardConditionStatus}" />
+                                </StackPanel>
+                            </Border>
+                        </Expander>
+
+                        <Grid Grid.Row="4" Margin="0,0,0,4">
                             <TextBlock Text="クリップボードにコピーする文字列" VerticalAlignment="Center"
                                        Style="{StaticResource FieldLabel}" Margin="0" />
                             <Button x:Name="InsertButton" Content="差し込みを挿入 ▾" HorizontalAlignment="Right"
@@ -191,7 +238,7 @@
                                     ToolTip="{}{date} などの差し込みをカーソル位置に挿入します" />
                         </Grid>
 
-                        <TextBox Grid.Row="4" x:Name="TextBox_Content"
+                        <TextBox Grid.Row="5" x:Name="TextBox_Content"
                                  AcceptsReturn="True" AcceptsTab="False" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto"
                                  VerticalContentAlignment="Top"
@@ -199,7 +246,7 @@
                                  Text="{Binding SelectedItem.Text, UpdateSourceTrigger=PropertyChanged}" />
 
                         <!-- 連番の設定（{seq} を使っているときだけ表示） -->
-                        <Border Grid.Row="5" Margin="0,12,0,0" Padding="12,10" CornerRadius="6"
+                        <Border Grid.Row="6" Margin="0,12,0,0" Padding="12,10" CornerRadius="6"
                                 Background="{DynamicResource Brush.Seq.Bg}"
                                 BorderBrush="{DynamicResource Brush.Seq.Border}"
                                 BorderThickness="1"
@@ -232,7 +279,7 @@
                         </Border>
 
                         <!-- プレビュー -->
-                        <StackPanel Grid.Row="6" Margin="0,12,0,0">
+                        <StackPanel Grid.Row="7" Margin="0,12,0,0">
                             <Grid Margin="0,0,0,4">
                                 <TextBlock Text="プレビュー（実際にコピーされる文字列）" VerticalAlignment="Center"
                                            Style="{StaticResource FieldLabel}" Margin="0" />
