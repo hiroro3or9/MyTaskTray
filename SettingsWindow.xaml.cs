@@ -411,8 +411,21 @@ namespace MyTaskTray
         }
 
         // ==================================================================
-        // スプリントの設定
+        // ホットキー・スプリントの設定
         // ==================================================================
+
+        private void OnOpenHotKeySettings(object sender, RoutedEventArgs e)
+        {
+            HotKeyPopup.IsOpen = true;
+
+            Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    HotKeyBox.Focus();
+                    HotKeyBox.SelectAll();
+                }),
+                DispatcherPriority.Input);
+        }
 
         private void OnOpenSprintSettings(object sender, RoutedEventArgs e)
         {
@@ -509,6 +522,8 @@ namespace MyTaskTray
 
             InsertPopup.IsOpen = false;
             CategoryPopup.IsOpen = false;
+            HotKeyPopup.IsOpen = false;
+            SprintPopup.IsOpen = false;
             e.Handled = true;
         }
 
@@ -571,7 +586,7 @@ namespace MyTaskTray
 
         private void OnResetSequence(object sender, RoutedEventArgs e)
         {
-            _vm.SelectedItem?.SequenceValue = 1;
+            _vm.SelectedItem?.ResetSequence();
         }
 
         private void OnCopyPreview(object sender, RoutedEventArgs e)
@@ -636,11 +651,49 @@ namespace MyTaskTray
 
         private bool TrySave()
         {
+            if (!_vm.TryGetNormalizedMenuHotKey(out string normalizedMenuHotKey, out string hotKeyError))
+            {
+                MessageBox.Show(
+                    "ホットキーを保存できません。\n" + hotKeyError,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                HotKeyPopup.IsOpen = true;
+                Dispatcher.BeginInvoke(
+                    new Action(() =>
+                    {
+                        HotKeyBox.Focus();
+                        HotKeyBox.SelectAll();
+                    }),
+                    DispatcherPriority.Input);
+                return false;
+            }
+
+            if (!_vm.TryGetSprintSchedule(out SprintSchedule? validatedSprint, out string sprintError))
+            {
+                MessageBox.Show(
+                    "スプリントの設定を保存できません。\n" + sprintError,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                SprintPopup.IsOpen = true;
+                Dispatcher.BeginInvoke(
+                    new Action(() =>
+                    {
+                        SprintAnchorBox.Focus();
+                        SprintAnchorBox.SelectAll();
+                    }),
+                    DispatcherPriority.Input);
+                return false;
+            }
+
             // 画面の項目そのものを整えてから写す。
             // 写したあとで整えると、保存した内容と画面の表示が食い違ったままになる
             NormalizeItems();
 
-            AppSettings settings = _vm.ToSettings();
+            AppSettings settings = _vm.ToSettings(normalizedMenuHotKey, validatedSprint);
 
             // 設定画面を開いている間にトレイからコピーされて進んだ連番を取り込む
             AdoptExternalSequenceValues(settings);
@@ -781,10 +834,12 @@ namespace MyTaskTray
             // カテゴリ候補はフォーカスがポップアップの外（▾ ボタン）に残るため、
             // ポップアップ側の PreviewKeyDown には届かず、
             // ここで拾わないと IsCancel のキャンセルボタンが反応して設定画面ごと閉じてしまう。
-            if (e.Key == Key.Escape && (InsertPopup.IsOpen || CategoryPopup.IsOpen || SprintPopup.IsOpen))
+            if (e.Key == Key.Escape
+                && (InsertPopup.IsOpen || CategoryPopup.IsOpen || HotKeyPopup.IsOpen || SprintPopup.IsOpen))
             {
                 InsertPopup.IsOpen = false;
                 CategoryPopup.IsOpen = false;
+                HotKeyPopup.IsOpen = false;
                 SprintPopup.IsOpen = false;
                 e.Handled = true;
                 return;

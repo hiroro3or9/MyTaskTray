@@ -9,11 +9,14 @@ namespace MyTaskTray.Models
     /// </summary>
     public class ClipItem : INotifyPropertyChanged
     {
+        /// <summary>連番を新規作成またはリセットしたときの値。</summary>
+        public const int InitialSequenceValue = 1;
+
         private string _name = string.Empty;
         private string _text = string.Empty;
         private string _category = string.Empty;
         private bool _isSeparator;
-        private int _sequenceValue = 1;
+        private int _sequenceValue = InitialSequenceValue;
         private int _sequenceStep = 1;
 
         /// <summary>
@@ -144,12 +147,28 @@ namespace MyTaskTray.Models
             }
         }
 
-        /// <summary>連番を 1 回分進める。</summary>
-        public void AdvanceSequence()
+        /// <summary>
+        /// 連番を 1 回分進める。int の範囲を超える場合は負数などへ周回させず、
+        /// 設定画面の「1 に戻す」と同じ初期値へ戻す。
+        /// </summary>
+        /// <returns>上限または下限を超えるため 1 に戻した場合は true。</returns>
+        public bool AdvanceSequence()
         {
             int step = SequenceStep == 0 ? 1 : SequenceStep;
-            SequenceValue = unchecked(SequenceValue + step);
+            long next = (long)SequenceValue + step;
+
+            if (next is < int.MinValue or > int.MaxValue)
+            {
+                ResetSequence();
+                return true;
+            }
+
+            SequenceValue = (int)next;
+            return false;
         }
+
+        /// <summary>連番を初期値へ戻す。</summary>
+        public void ResetSequence() => SequenceValue = InitialSequenceValue;
 
         public ClipItem Clone() => new()
         {

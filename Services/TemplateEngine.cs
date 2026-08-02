@@ -567,8 +567,10 @@ namespace MyTaskTray.Services
                             throw new FormatException("{seq} に単位は指定できません。");
                         }
 
+                        // 表示用のオフセットは永続カウンターを変更しない。
+                        // int の範囲を超えた場合は外側の catch で差し込みを未展開のまま残す。
                         return FormatSequence(
-                            unchecked(sequenceValue + (offsets.Length == 1 ? offsets[0].Offset : 0)), format);
+                            checked(sequenceValue + (offsets.Length == 1 ? offsets[0].Offset : 0)), format);
 
                     case "clip":
                         RejectBase(name, hasBase);

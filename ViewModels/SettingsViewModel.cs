@@ -34,6 +34,7 @@ namespace MyTaskTray.ViewModels
         private ClipItem? _selectedItem;
         private string _filterText = string.Empty;
         private bool _showCopyNotification;
+        private string _menuHotKey = string.Empty;
         private bool _isDirty;
 
         // トレイ側で進んだ連番を取り込んでいる最中かどうか。
@@ -56,6 +57,7 @@ namespace MyTaskTray.ViewModels
         {
             Version = settings.Version;
             _showCopyNotification = settings.ShowCopyNotification;
+            _menuHotKey = settings.MenuHotKey ?? string.Empty;
             _sprintAnchorText = settings.SprintAnchorDate?.ToString(SprintDateFormat, CultureInfo.InvariantCulture)
                 ?? string.Empty;
             _sprintLengthText = settings.SprintLengthDays.ToString(CultureInfo.InvariantCulture);
@@ -128,6 +130,67 @@ namespace MyTaskTray.ViewModels
         }
 
         /// <summary>
+        /// トレイメニューを表示するグローバルホットキー。空欄なら無効。
+        /// 入力途中を許すため文字列で持ち、保存時に解釈できるか検証する。
+        /// </summary>
+        public string MenuHotKey
+        {
+            get => _menuHotKey;
+            set
+            {
+                string next = value ?? string.Empty;
+                if (string.Equals(_menuHotKey, next, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _menuHotKey = next;
+                IsDirty = true;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(MenuHotKeyStatus));
+            }
+        }
+
+        /// <summary>ホットキー入力欄の下に表示する、無効・正常・エラーの説明。</summary>
+        public string MenuHotKeyStatus
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_menuHotKey))
+                {
+                    return "空欄のため、ホットキーは無効です。";
+                }
+
+                return HotKeyGesture.TryParse(_menuHotKey, out HotKeyGesture gesture, out string error)
+                    ? $"保存後に {gesture.DisplayName} でメニューを表示します。"
+                    : error;
+            }
+        }
+
+        /// <summary>
+        /// 保存用にホットキーを検証し、Ctrl+Alt+V のような統一表記へ整える。
+        /// 空欄は有効な「無効」設定として受け付ける。
+        /// </summary>
+        public bool TryGetNormalizedMenuHotKey(out string normalized, out string error)
+        {
+            if (string.IsNullOrWhiteSpace(_menuHotKey))
+            {
+                normalized = string.Empty;
+                error = string.Empty;
+                return true;
+            }
+
+            if (!HotKeyGesture.TryParse(_menuHotKey, out HotKeyGesture gesture, out error))
+            {
+                normalized = string.Empty;
+                return false;
+            }
+
+            normalized = gesture.DisplayName;
+            return true;
+        }
+
+        /// <summary>
         /// スプリントの基準日（yyyy-MM-dd）。どれか 1 つのスプリントの開始日を書く。
         /// 空、または解釈できない文字列のあいだは <c>@sprint</c> の差し込みを展開しない。
         /// </summary>
@@ -173,31 +236,49 @@ namespace MyTaskTray.ViewModels
         /// </summary>
         public SprintSchedule? Sprint
         {
-            get
+            get => TryGetSprintSchedule(out SprintSchedule? sprint, out _) ? sprint : null;
+        }
+
+        /// <summary>
+        /// スプリント入力を保存できる状態か検証する。
+        /// 基準日の空欄は意図的な「未設定」として受け付けるが、
+        /// 何か入力されていて解釈できない場合は保存させない。
+        /// </summary>
+        public bool TryGetSprintSchedule(out SprintSchedule? sprint, out string error)
+        {
+            sprint = null;
+            error = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(_sprintAnchorText))
             {
-                if (!DateTime.TryParseExact(
-                        _sprintAnchorText.Trim(),
-                        SprintDateFormat,
-                        CultureInfo.InvariantCulture,
-                        DateTimeStyles.None,
-                        out DateTime anchor))
-                {
-                    return null;
-                }
-
-                if (!int.TryParse(
-                        _sprintLengthText.Trim(),
-                        NumberStyles.Integer,
-                        CultureInfo.InvariantCulture,
-                        out int length)
-                    || length < 1
-                    || length > MaxSprintLengthDays)
-                {
-                    return null;
-                }
-
-                return new SprintSchedule(anchor, length);
+                return true;
             }
+
+            if (!DateTime.TryParseExact(
+                    _sprintAnchorText.Trim(),
+                    SprintDateFormat,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out DateTime anchor))
+            {
+                error = $"基準日は {SprintDateFormat} 形式（例 2026-04-06）で入力してください。";
+                return false;
+            }
+
+            if (!int.TryParse(
+                    _sprintLengthText.Trim(),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out int length)
+                || length < 1
+                || length > MaxSprintLengthDays)
+            {
+                error = $"スプリントの長さは 1〜{MaxSprintLengthDays} の整数で入力してください。";
+                return false;
+            }
+
+            sprint = new SprintSchedule(anchor, length);
+            return true;
         }
 
         /// <summary>スプリント設定の入力欄の下に出す説明。いまのスプリントの期間か、誤りの内容。</summary>
@@ -210,12 +291,12 @@ namespace MyTaskTray.ViewModels
                     return "基準日を入れると {date@sprint} などが使えるようになります。";
                 }
 
-                if (Sprint is not { } sprint)
+                if (!TryGetSprintSchedule(out SprintSchedule? sprint, out string error))
                 {
-                    return $"基準日は {SprintDateFormat}（例 2026-04-06）、長さは 1〜{MaxSprintLengthDays} の数字で入れてください。";
+                    return error;
                 }
 
-                DateTime start = sprint.StartOf(DateTime.Now);
+                DateTime start = sprint!.StartOf(DateTime.Now);
                 DateTime end = start.AddDays(sprint.LengthDays - 1);
                 return $"いまのスプリント: {start:yyyy/MM/dd}（{start:ddd}）〜 {end:yyyy/MM/dd}（{end:ddd}）";
             }
@@ -447,19 +528,17 @@ namespace MyTaskTray.ViewModels
         public bool HasCategories => KnownCategories.Count > 0;
 
         /// <summary>
-        /// 保存用の設定オブジェクトを作る。
-        /// スプリントの入力が解釈できない場合は、誤った区切りを保存してしまわないよう未設定として扱う。
+        /// 保存用の設定オブジェクトを作る。ホットキーとスプリントは保存前に検証済みの値を受け取る。
         /// </summary>
-        public AppSettings ToSettings()
+        public AppSettings ToSettings(string normalizedMenuHotKey, SprintSchedule? validatedSprint)
         {
-            SprintSchedule? sprint = Sprint;
-
             return new()
             {
                 Version = Version,
                 ShowCopyNotification = ShowCopyNotification,
-                SprintAnchorDate = sprint?.AnchorDate,
-                SprintLengthDays = sprint?.LengthDays ?? 14,
+                MenuHotKey = normalizedMenuHotKey,
+                SprintAnchorDate = validatedSprint?.AnchorDate,
+                SprintLengthDays = validatedSprint?.LengthDays ?? 14,
                 Items = [.. Items.Select(i => i.Clone())],
             };
         }

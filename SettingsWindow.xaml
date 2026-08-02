@@ -255,7 +255,10 @@
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <CheckBox Content="コピーしたときに通知を表示する" VerticalAlignment="Center"
                           IsChecked="{Binding ShowCopyNotification}" />
-                <Button x:Name="SprintButton" Content="スプリントの設定" Margin="16,0,0,0"
+                <Button x:Name="HotKeyButton" Content="ホットキーの設定" Margin="16,0,0,0"
+                        Style="{StaticResource SubtleButton}" Click="OnOpenHotKeySettings"
+                        ToolTip="トレイメニューを表示するグローバルホットキーを設定します" />
+                <Button x:Name="SprintButton" Content="スプリントの設定" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenSprintSettings"
                         ToolTip="{}{date@sprint} などが参照する基準日と長さを決めます" />
                 <Button x:Name="FolderButton" Content="設定フォルダーを開く" Margin="8,0,0,0"
@@ -267,6 +270,25 @@
                         Style="{StaticResource AccentButton}" Click="OnSave" IsDefault="True" />
             </StackPanel>
         </Grid>
+
+        <!-- グローバルホットキー設定パネル -->
+        <Popup x:Name="HotKeyPopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"
+               Placement="Top" PlacementTarget="{Binding ElementName=HotKeyButton}"
+               VerticalOffset="-4" HorizontalOffset="-10"
+               PreviewKeyDown="OnPopupPreviewKeyDown">
+            <Border Style="{StaticResource PopupCard}" Width="420" Margin="10">
+                <StackPanel Margin="14">
+                    <TextBlock Text="メニューを表示するホットキー" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="Ctrl+Alt+V のように入力します。空欄なら無効です。通常の文字入力を妨げないよう、Ctrl / Alt / Win のいずれかを必ず含めてください。" />
+                    <TextBox x:Name="HotKeyBox"
+                             Text="{Binding MenuHotKey, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="キーは A〜Z、0〜9、F1〜F24 を指定できます" />
+                    <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="{Binding MenuHotKeyStatus}" />
+                </StackPanel>
+            </Border>
+        </Popup>
 
         <!-- スプリント設定パネル -->
         <Popup x:Name="SprintPopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"

@@ -39,16 +39,19 @@ namespace MyTaskTray.Services
         /// それでも読めなければ、破損とは区別して退避も上書きもせず、
         /// <see cref="AppSettings.IsFallback"/> を立てた空の設定を返す。
         /// </summary>
-        public static AppSettings Load()
+        public static AppSettings Load() => Load(FilePath);
+
+        /// <summary>指定パスから設定を読み込む。境界動作を副作用なく検証できるよう内部でパスを受け取る。</summary>
+        internal static AppSettings Load(string filePath)
         {
-            if (!File.Exists(FilePath))
+            if (!File.Exists(filePath))
             {
                 AppSettings created = AppSettings.CreateDefault();
                 EnsureIds(created);
 
                 try
                 {
-                    Save(created);
+                    Save(created, filePath);
                 }
                 catch (Exception)
                 {
@@ -59,7 +62,7 @@ namespace MyTaskTray.Services
                 return created;
             }
 
-            string? json = TryReadFile();
+            string? json = TryReadFile(filePath);
             if (json is null)
             {
                 // ウイルス対策や同期ソフトによる一時的なロックが続いている状態。
@@ -74,15 +77,23 @@ namespace MyTaskTray.Services
             }
             catch (JsonException)
             {
-                return BackupAndCreateDefault();
+                return BackupAndCreateDefault(filePath);
             }
 
             if (loaded is null)
             {
-                return BackupAndCreateDefault();
+                return BackupAndCreateDefault(filePath);
             }
 
             loaded.Items ??= [];
+
+            // nullable 注釈が付いていない List<ClipItem> でも、JSON の配列には null を書ける。
+            // そのまま EnsureIds() へ渡すと起動時に NullReferenceException になるため、
+            // 構文だけでなく設定の構造も壊れているものとして扱う。
+            if (loaded.Items.Any(static item => item is null))
+            {
+                return BackupAndCreateDefault(filePath);
+            }
 
             // 手で書き足した項目には Id が無い。ここで採番して書き戻しておかないと、
             // 読むたびに別の Id になり、連番の引き継ぎ（Id での突き合わせ）が働かない
@@ -90,7 +101,7 @@ namespace MyTaskTray.Services
             {
                 try
                 {
-                    Save(loaded);
+                    Save(loaded, filePath);
                 }
                 catch (Exception)
                 {
@@ -102,15 +113,32 @@ namespace MyTaskTray.Services
         }
 
         /// <summary>
-        /// 壊れたファイルを .bak に退避し、既定値を返す。
-        /// 退避してあるので、既定値をそのまま保存してしまっても元の内容は取り戻せる。
+        /// 壊れたファイルを .bak に退避し、既定値の設定ファイルへ置き換える。
+        /// バックアップまたは保存に失敗した場合は元ファイルを不用意に上書きせず、
+        /// <see cref="AppSettings.IsFallback"/> を立てて自動保存を止める。
         /// </summary>
-        private static AppSettings BackupAndCreateDefault()
+        private static AppSettings BackupAndCreateDefault(string filePath)
         {
-            TryBackupBrokenFile();
-
             AppSettings created = AppSettings.CreateDefault();
             EnsureIds(created);
+
+            // 元の内容を取り戻せる状態にできなければ、既定値で上書きしてはいけない
+            if (!TryBackupBrokenFile(filePath))
+            {
+                created.IsFallback = true;
+                return created;
+            }
+
+            try
+            {
+                Save(created, filePath);
+            }
+            catch (Exception)
+            {
+                // バックアップは済んでいるが、既定設定への置き換えは完了していない
+                created.IsFallback = true;
+            }
+
             return created;
         }
 
@@ -118,13 +146,13 @@ namespace MyTaskTray.Services
         /// ファイルを読む。ロックされている場合は少し待って再試行する。
         /// 読めなかった場合は null。
         /// </summary>
-        private static string? TryReadFile()
+        private static string? TryReadFile(string filePath)
         {
             for (int attempt = 1; attempt <= MaxReadAttempts; attempt++)
             {
                 try
                 {
-                    return File.ReadAllText(FilePath, Encoding.UTF8);
+                    return File.ReadAllText(filePath, Encoding.UTF8);
                 }
                 catch (Exception) when (attempt < MaxReadAttempts)
                 {
@@ -157,37 +185,44 @@ namespace MyTaskTray.Services
         }
 
         /// <summary>設定を保存する。書き込みは一時ファイル経由で行い、破損を避ける。</summary>
-        public static void Save(AppSettings settings)
+        public static void Save(AppSettings settings) => Save(settings, FilePath);
+
+        /// <summary>指定パスへ設定を保存する。一時ファイル経由の置き換え規則は公開経路と同じ。</summary>
+        internal static void Save(AppSettings settings, string filePath)
         {
-            Directory.CreateDirectory(DirectoryPath);
+            string directoryPath = Path.GetDirectoryName(filePath)
+                ?? throw new ArgumentException("設定ファイルの保存先フォルダーを特定できません。", nameof(filePath));
+            Directory.CreateDirectory(directoryPath);
 
             string json = JsonSerializer.Serialize(settings, JsonOptions);
-            string tempPath = FilePath + ".tmp";
+            string tempPath = filePath + ".tmp";
 
             File.WriteAllText(tempPath, json, new UTF8Encoding(false));
 
-            if (File.Exists(FilePath))
+            if (File.Exists(filePath))
             {
-                File.Replace(tempPath, FilePath, null);
+                File.Replace(tempPath, filePath, null);
             }
             else
             {
-                File.Move(tempPath, FilePath);
+                File.Move(tempPath, filePath);
             }
         }
 
-        private static void TryBackupBrokenFile()
+        private static bool TryBackupBrokenFile(string filePath)
         {
             try
             {
-                if (File.Exists(FilePath))
+                if (File.Exists(filePath))
                 {
-                    File.Copy(FilePath, FilePath + ".bak", true);
+                    File.Copy(filePath, filePath + ".bak", true);
                 }
+
+                return true;
             }
             catch (Exception)
             {
-                // 退避に失敗しても処理は続行する
+                return false;
             }
         }
     }

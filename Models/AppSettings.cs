@@ -26,6 +26,12 @@ namespace MyTaskTray.Models
         public bool ShowCopyNotification { get; set; } = true;
 
         /// <summary>
+        /// トレイメニューをカーソル位置へ表示するグローバルホットキー。
+        /// 空文字なら登録しない。既定で他アプリのキーを奪わないよう、初期値は空にする。
+        /// </summary>
+        public string MenuHotKey { get; set; } = string.Empty;
+
+        /// <summary>
         /// スプリントの区切りを数え始める日（どれか 1 つのスプリントの開始日）。
         /// null なら未設定で、<c>@sprint</c> を使った差し込みは展開されない。
         /// </summary>
@@ -69,6 +75,7 @@ namespace MyTaskTray.Models
         {
             Version = Version,
             ShowCopyNotification = ShowCopyNotification,
+            MenuHotKey = MenuHotKey,
             SprintAnchorDate = SprintAnchorDate,
             SprintLengthDays = SprintLengthDays,
             Items = [.. Items.Select(i => i.Clone())],

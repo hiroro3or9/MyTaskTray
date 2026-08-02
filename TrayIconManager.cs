@@ -16,6 +16,8 @@ namespace MyTaskTray
     {
         private const string ToolTipText = "MyTaskTray";
         private const int MenuTextMaxLength = 40;
+        private const string ExitSeparatorName = "ExitSeparator";
+        private const string ExitMenuItemName = "ExitMenuItem";
 
         // NotifyIcon が右クリック時に使っている内部処理。左クリックでも同じ見せ方をするために借りる。
         // 非公開メンバーなので将来の .NET で無くなる可能性があるが、
@@ -27,6 +29,7 @@ namespace MyTaskTray
         private readonly NotifyIcon _notifyIcon;
         private AppSettings _settings;
         private SettingsWindow? _settingsWindow;
+        private GlobalHotKey? _menuHotKey;
         private Icon? _icon;
         private bool _disposed;
 
@@ -54,6 +57,50 @@ namespace MyTaskTray
         {
             RebuildMenu();
             _notifyIcon.Visible = true;
+            RegisterMenuHotKey();
+        }
+
+        /// <summary>
+        /// 設定されている場合だけメニュー表示用ホットキーを登録する。
+        /// 空欄は明示的な無効状態で、他アプリのキーを既定で奪わない。
+        /// </summary>
+        private void RegisterMenuHotKey()
+        {
+            _menuHotKey?.Dispose();
+            _menuHotKey = null;
+
+            string configured = _settings.MenuHotKey?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(configured))
+            {
+                return;
+            }
+
+            if (!HotKeyGesture.TryParse(configured, out HotKeyGesture gesture, out string error))
+            {
+                ToastWindow.ShowToast("ホットキーの設定が不正です", error);
+                return;
+            }
+
+            try
+            {
+                _menuHotKey = new GlobalHotKey(gesture, () => ShowTrayMenu(atCursor: true));
+                if (_menuHotKey.IsRegistered)
+                {
+                    return;
+                }
+
+                _menuHotKey.Dispose();
+                _menuHotKey = null;
+            }
+            catch (Exception)
+            {
+                _menuHotKey?.Dispose();
+                _menuHotKey = null;
+            }
+
+            ToastWindow.ShowToast(
+                "ホットキーを登録できません",
+                $"{gesture.DisplayName} は別のアプリで使用されている可能性があります");
         }
 
         /// <summary>設定を読み直してメニューを作り直す。</summary>
@@ -61,6 +108,7 @@ namespace MyTaskTray
         {
             _settings = SettingsStore.Load();
             RebuildMenu();
+            RegisterMenuHotKey();
         }
 
         private void OnIconMouseUp(object? sender, MouseEventArgs e)
@@ -79,7 +127,7 @@ namespace MyTaskTray
         /// 別の場所をクリックしてもメニューが閉じない。NotifyIcon が右クリック時に
         /// 使っている内部処理を呼び、閉じる挙動と表示位置を右クリックに合わせる。
         /// </summary>
-        private void ShowTrayMenu()
+        private void ShowTrayMenu(bool atCursor = false)
         {
             ContextMenuStrip? menu = _notifyIcon.ContextMenuStrip;
             if (menu is null)
@@ -94,26 +142,81 @@ namespace MyTaskTray
                 return;
             }
 
-            try
+            if (!atCursor)
             {
-                MethodInfo? showContextMenu = ShowContextMenuMethod;
-                if (showContextMenu is not null)
+                try
                 {
-                    showContextMenu.Invoke(_notifyIcon, null);
-                    return;
+                    MethodInfo? showContextMenu = ShowContextMenuMethod;
+                    if (showContextMenu is not null)
+                    {
+                        showContextMenu.Invoke(_notifyIcon, null);
+                        return;
+                    }
+                }
+                catch (Exception)
+                {
+                    // 内部処理が使えない環境では、下の手動表示にフォールバックする
                 }
             }
-            catch (Exception)
+
+            if (atCursor)
             {
-                // 内部処理が使えない環境では、下の手動表示にフォールバックする
+                HideExitItemsUntilClosed(menu);
             }
 
-            // フォールバック: 自分でメニューを出し、前面に持ってくることで
-            // 別の場所をクリックしたときに閉じるようにする
+            // ホットキーでは作業中の画面にあるカーソル位置へ表示する。
+            // 通常クリックのフォールバックでも同じ経路を使う。
             menu.Show(System.Windows.Forms.Cursor.Position);
 
             // 前面に持ってこられなくてもメニュー自体は出ているため、結果は見ない
             _ = SetForegroundWindow(menu.Handle);
+
+            if (atCursor)
+            {
+                // ホットキーを押した手をマウスへ移さず、矢印キーと Enter で選べるようにする
+                SelectFirstEnabledItem(menu.Items);
+            }
+        }
+
+        /// <summary>
+        /// ホットキーから開いたメニューでは、誤操作でアプリを終了しないよう終了項目を隠す。
+        /// 同じメニューをトレイから開いたときには表示されるよう、閉じた時点で元へ戻す。
+        /// </summary>
+        private static void HideExitItemsUntilClosed(ContextMenuStrip menu)
+        {
+            ToolStripItem? separator = menu.Items[ExitSeparatorName];
+            ToolStripItem? exitItem = menu.Items[ExitMenuItemName];
+            if (exitItem is null)
+            {
+                return;
+            }
+
+            separator?.Available = false;
+
+            exitItem.Available = false;
+
+            void RestoreExitItems(object? sender, ToolStripDropDownClosedEventArgs e)
+            {
+                menu.Closed -= RestoreExitItems;
+
+                separator?.Available = true;
+
+                exitItem.Available = true;
+            }
+
+            menu.Closed += RestoreExitItems;
+        }
+
+        private static void SelectFirstEnabledItem(ToolStripItemCollection items)
+        {
+            foreach (ToolStripItem item in items)
+            {
+                if (item.Available && item.Enabled && item is not ToolStripSeparator)
+                {
+                    item.Select();
+                    return;
+                }
+            }
         }
 
         private void OnThemeChanged(object? sender, EventArgs e)
@@ -149,9 +252,9 @@ namespace MyTaskTray
             settingsItem.Click += (_, _) => ShowSettingsWindow();
             menu.Items.Add(settingsItem);
 
-            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripSeparator { Name = ExitSeparatorName });
 
-            ToolStripMenuItem exitItem = new("終了(&X)");
+            ToolStripMenuItem exitItem = new("終了(&X)") { Name = ExitMenuItemName };
             exitItem.Click += (_, _) => ExitApplication();
             menu.Items.Add(exitItem);
 
@@ -413,13 +516,20 @@ namespace MyTaskTray
             // 連番を使った場合はカウンターを進めて保存する
             if (item.UsesSequence)
             {
-                item.AdvanceSequence();
+                bool sequenceReset = item.AdvanceSequence();
                 TrySaveSettings();
 
                 // 設定画面は開いた時点の複製を持っているため、進んだ番号は自動では伝わらない。
                 // 保存時に突き合わせるので値は失われないが、開いているあいだ
                 // 画面の「次の番号」が実際と違う値のままになるので、その場で伝える
                 _settingsWindow?.NotifySequenceAdvanced(item.Id, item.SequenceValue);
+
+                if (sequenceReset)
+                {
+                    ToastWindow.ShowToast(
+                        "連番を 1 に戻しました",
+                        "上限または下限を超えるため、次の番号を初期値へ戻しました。今回のコピーは完了しています");
+                }
             }
         }
 
@@ -618,6 +728,8 @@ namespace MyTaskTray
 
             _disposed = true;
             ThemeManager.ThemeChanged -= OnThemeChanged;
+            _menuHotKey?.Dispose();
+            _menuHotKey = null;
             _notifyIcon.MouseUp -= OnIconMouseUp;
             _notifyIcon.Visible = false;
             _notifyIcon.ContextMenuStrip?.Dispose();
