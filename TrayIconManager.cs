@@ -18,6 +18,9 @@ namespace MyTaskTray
     {
         private const string ToolTipText = "MyTaskTray";
         private const int MenuTextMaxLength = 40;
+
+        /// <summary>メニュー項目に振るアクセスキー。1〜9 のあと 0 で 10 個。</summary>
+        private const string NumberAccessKeys = "1234567890";
         private const string ExitSeparatorName = "ExitSeparator";
         private const string ExitMenuItemName = "ExitMenuItem";
 
@@ -558,6 +561,10 @@ namespace MyTaskTray
 
             Dictionary<string, ToolStripMenuItem> categories = new(StringComparer.Ordinal);
 
+            // 番号を振る対象。メニューにはこのメソッドが足すもの以外
+            // （「設定」「終了」など）も並ぶため、ここで足したものだけを覚えておく
+            List<ToolStripMenuItem> numbered = [];
+
             foreach (MenuEntry menuEntry in source)
             {
                 ClipItem item = menuEntry.Item;
@@ -572,6 +579,11 @@ namespace MyTaskTray
                 if (string.IsNullOrEmpty(category))
                 {
                     target.Add(entry);
+                    if (entry is ToolStripMenuItem topLevelItem)
+                    {
+                        numbered.Add(topLevelItem);
+                    }
+
                     continue;
                 }
 
@@ -587,6 +599,7 @@ namespace MyTaskTray
 
                     categories[category] = parent;
                     target.Add(parent);
+                    numbered.Add(parent);
                 }
 
                 parent.DropDownItems.Add(entry);
@@ -599,8 +612,124 @@ namespace MyTaskTray
                 if (parent.DropDownItems.Count == 0)
                 {
                     parent.Enabled = false;
+                    continue;
                 }
+
+                // サブメニューの中は開いたときに改めて 1 から振り直す
+                EnableNumberKeys(AssignNumberAccessKeys(parent.DropDownItems.OfType<ToolStripMenuItem>()));
             }
+
+            // 中身が空でサブメニューが無効になった場合は番号を飛ばしたいので、上の整理のあとに振る
+            EnableNumberKeys(AssignNumberAccessKeys(numbered));
+        }
+
+        /// <summary>
+        /// 数字キーで項目を選べるようにする。
+        ///
+        /// <c>&amp;1</c> のアクセスキーは、<strong>親フォームを持たないポップアップでは処理されない</strong>。
+        /// WinForms のニーモニック解決は所属するコンテナ（Form / ContainerControl）をたどる仕組みだが、
+        /// このメニューは <see cref="MenuHostWindow"/>（NativeWindow）を持ち主にしていて
+        /// Control の親子関係に載っていないため、たどる先が無い。
+        /// 矢印キーと Enter が効くのは、そちらが <c>ToolStripManager</c> の
+        /// モーダルフィルタで直接処理されていて、コンテナをたどらないため。
+        ///
+        /// そこでキー入力を自分で拾う。番号は
+        /// <see cref="ToolStripMenuItem.ShortcutKeyDisplayString"/> で右端に表示していて、
+        /// アクセスキー（<c>&amp;</c>）はもう使っていない。
+        /// </summary>
+        private static void EnableNumberKeys(List<ToolStripMenuItem> numbered)
+        {
+            if (numbered.Count == 0 || numbered[0].Owner is not ToolStripDropDown dropDown)
+            {
+                return;
+            }
+
+            dropDown.KeyDown += (_, e) =>
+            {
+                int index = NumberKeyToIndex(e.KeyCode);
+                if (index < 0 || index >= numbered.Count)
+                {
+                    return;
+                }
+
+                ToolStripMenuItem target = numbered[index];
+
+                // 数字がメニューの先頭文字移動などに二重に使われないよう、ここで止める
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+
+                if (target.HasDropDownItems)
+                {
+                    // カテゴリは開くだけ。中の番号は開いた先で 1 から振り直してある
+                    target.Select();
+                    target.ShowDropDown();
+                    target.DropDownItems.OfType<ToolStripMenuItem>()
+                        .FirstOrDefault(i => i.Enabled)?.Select();
+                    return;
+                }
+
+                // マウスでクリックした場合と同じ経路を通す。
+                // メニューを閉じる処理とフォーカスの戻しも、これでそのまま効く
+                target.PerformClick();
+            };
+        }
+
+        /// <summary>数字キーを 0 起点の番号に変換する。番号キーでなければ -1。</summary>
+        private static int NumberKeyToIndex(Keys key) => key switch
+        {
+            >= Keys.D1 and <= Keys.D9 => key - Keys.D1,
+            Keys.D0 => 9,
+            >= Keys.NumPad1 and <= Keys.NumPad9 => key - Keys.NumPad1,
+            Keys.NumPad0 => 9,
+            _ => -1,
+        };
+
+        /// <summary>
+        /// メニュー項目の先頭に <c>1</c>〜<c>9</c>・<c>0</c> のアクセスキーを振る。
+        /// ホットキーでメニューを出したあと、数字を 1 つ押すだけで選べるようにするため。
+        ///
+        /// アクセスキーは<strong>開いているドロップダウンの中だけ</strong>で解決されるため、
+        /// トップレベルとサブメニューに同じ番号があっても衝突しない。
+        /// サブメニューは開いた時点で 1 から振り直される。
+        ///
+        /// 番号は表示順に振る（並べ替えると番号も変わる）。
+        /// これは「一覧の並び順がそのままメニューの順序になる」という既存の考え方と揃えている。
+        /// 11 個目以降には振らない。矢印キーで選ぶ。
+        /// </summary>
+        /// <returns>
+        /// 実際に番号を振った項目を、番号の順に並べたもの。
+        /// 無効な項目を飛ばすので、この並びがそのまま「何番を押すとどれか」になる。
+        /// </returns>
+        private static List<ToolStripMenuItem> AssignNumberAccessKeys(IEnumerable<ToolStripMenuItem> items)
+        {
+            List<ToolStripMenuItem> assigned = [];
+
+            foreach (ToolStripMenuItem item in items)
+            {
+                if (assigned.Count >= NumberAccessKeys.Length)
+                {
+                    break;
+                }
+
+                // 選べない項目に番号を使うと、その番号が無駄になる
+                if (!item.Enabled)
+                {
+                    continue;
+                }
+
+                // 番号と名前のあいだは全角スペース。半角スペースだと数字が名前と地続きに見えて、
+                // どこまでが番号でどこからが名前か目で切り分けにくい。
+                //
+                // 右端のショートカット欄（ShortcutKeyDisplayString）に出す手もあるが、
+                // サブメニューを持つ項目は右端が開閉の矢印に使われるため WinForms が描画せず、
+                // カテゴリだけ番号が消える。先頭に置けば両方を同じ見た目にできる。
+                //
+                // Text は EscapeAmpersand 済みなので、ここで足す分だけを考えればよい
+                item.Text = $"{NumberAccessKeys[assigned.Count]}　{item.Text}";
+                assigned.Add(item);
+            }
+
+            return assigned;
         }
 
         /// <summary>
