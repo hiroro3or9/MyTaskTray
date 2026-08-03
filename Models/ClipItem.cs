@@ -20,6 +20,8 @@ namespace MyTaskTray.Models
         private int _sequenceStep = 1;
         private ClipboardMatchKind _clipboardCondition;
         private string _clipboardPattern = string.Empty;
+        private string _appProcess = string.Empty;
+        private string _appTitlePattern = string.Empty;
 
         /// <summary>
         /// 項目を識別する ID。連番カウンターの引き継ぎに使う。
@@ -84,6 +86,33 @@ namespace MyTaskTray.Models
         }
 
         /// <summary>
+        /// この項目を表示する前面アプリの実行ファイル名。カンマ区切りで複数書ける。
+        /// 空ならアプリを問わない。<c>.exe</c> は省略でき、大文字小文字は区別しない。
+        /// </summary>
+        public string AppProcess
+        {
+            get => _appProcess;
+            set => Set(
+                ref _appProcess,
+                value ?? string.Empty,
+                nameof(AppProcess),
+                nameof(HasAppCondition));
+        }
+
+        /// <summary>
+        /// この項目を表示する前面ウィンドウのタイトルに対する正規表現。空ならタイトルを見ない。
+        /// </summary>
+        public string AppTitlePattern
+        {
+            get => _appTitlePattern;
+            set => Set(
+                ref _appTitlePattern,
+                value ?? string.Empty,
+                nameof(AppTitlePattern),
+                nameof(HasAppCondition));
+        }
+
+        /// <summary>
         /// 所属カテゴリ。空文字ならトップレベルに表示、
         /// 値があればその名前のサブメニュー配下に表示する。
         /// </summary>
@@ -139,6 +168,11 @@ namespace MyTaskTray.Models
         /// <summary>スマートアクションの条件として正規表現を使うかどうか。</summary>
         [JsonIgnore]
         public bool IsRegexCondition => ClipboardCondition == ClipboardMatchKind.Regex;
+
+        /// <summary>前面アプリによる絞り込みが設定されているかどうか。</summary>
+        [JsonIgnore]
+        public bool HasAppCondition
+            => !string.IsNullOrWhiteSpace(AppProcess) || !string.IsNullOrWhiteSpace(AppTitlePattern);
 
         /// <summary>区切り線ではない通常の項目かどうか（テンプレートの切り替えに使う）。</summary>
         [JsonIgnore]
@@ -221,6 +255,8 @@ namespace MyTaskTray.Models
             SequenceStep = SequenceStep,
             ClipboardCondition = ClipboardCondition,
             ClipboardPattern = ClipboardPattern,
+            AppProcess = AppProcess,
+            AppTitlePattern = AppTitlePattern,
         };
 
         public event PropertyChangedEventHandler? PropertyChanged;

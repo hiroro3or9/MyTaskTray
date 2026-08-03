@@ -59,6 +59,11 @@ namespace MyTaskTray.ViewModels
         private string _clipboard = string.Empty;
 
         public SettingsViewModel(AppSettings settings)
+            : this(settings, [])
+        {
+        }
+
+        public SettingsViewModel(AppSettings settings, IReadOnlyList<string> recentApps)
         {
             Version = settings.Version;
             _showCopyNotification = settings.ShowCopyNotification;
@@ -69,6 +74,7 @@ namespace MyTaskTray.ViewModels
 
             Items = new ObservableCollection<ClipItem>(settings.Items);
             KnownCategories = [];
+            KnownApps = [.. recentApps];
             Placeholders = new ObservableCollection<PlaceholderRow>(
                 TemplateEngine.Placeholders.Select(p => new PlaceholderRow(p)));
             ClipboardMatchOptions =
@@ -103,6 +109,15 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>カテゴリ入力欄の候補。</summary>
         public ObservableCollection<string> KnownCategories { get; }
+
+        /// <summary>
+        /// 「現在のアプリ ▾」に出す候補。トレイメニューを開いたときに前面だったアプリを
+        /// 新しい順に数件だけ持ち回したもの。利用者は実行ファイル名を知らないため、この候補が要る。
+        /// </summary>
+        public ObservableCollection<string> KnownApps { get; }
+
+        /// <summary>候補に出せる前面アプリがあるかどうか。</summary>
+        public bool HasKnownApps => KnownApps.Count > 0;
 
         /// <summary>「差し込みを挿入」パネルに並べる一覧。</summary>
         public ObservableCollection<PlaceholderRow> Placeholders { get; }
@@ -373,6 +388,7 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(Preview));
                 OnPropertyChanged(nameof(NeedsPreviewRefresh));
                 OnPropertyChanged(nameof(ClipboardConditionStatus));
+                OnPropertyChanged(nameof(AppConditionStatus));
             }
         }
 
@@ -427,6 +443,50 @@ namespace MyTaskTray.ViewModels
                 return option.Description + (matched
                     ? " 現在のクリップボードには一致しています。"
                     : " 現在のクリップボードには一致していません。");
+            }
+        }
+
+        /// <summary>選択項目のアプリ条件の説明。何が起きるかを、書いた内容から組み立てて出す。</summary>
+        public string AppConditionStatus
+        {
+            get
+            {
+                if (SelectedItem is null || SelectedItem.IsSeparator)
+                {
+                    return string.Empty;
+                }
+
+                if (!SelectedItem.HasAppCondition)
+                {
+                    return "空欄のままなら、どのアプリを使っていても表示します。";
+                }
+
+                if (!AppContextMatcher.TryValidateTitlePattern(SelectedItem.AppTitlePattern, out string error))
+                {
+                    return error;
+                }
+
+                IReadOnlyList<string> apps = AppContextMatcher.SplitProcessNames(SelectedItem.AppProcess);
+                bool hasTitle = !string.IsNullOrWhiteSpace(SelectedItem.AppTitlePattern);
+
+                string app = apps.Count switch
+                {
+                    0 => string.Empty,
+                    1 => $"{apps[0]} が前面",
+                    _ => $"{string.Join(" / ", apps)} のいずれかが前面",
+                };
+
+                string title = hasTitle ? "ウィンドウタイトルが正規表現に一致する" : string.Empty;
+
+                string condition = (app.Length, title.Length) switch
+                {
+                    (> 0, > 0) => app + "で、" + title,
+                    (> 0, _) => app + "の",
+                    _ => title,
+                };
+
+                return condition + "ときだけ表示します。"
+                    + "前面のアプリを判別できない場合は、隠さずに表示します。";
             }
         }
 
@@ -635,6 +695,13 @@ namespace MyTaskTray.ViewModels
                     invalidItem = item;
                     return false;
                 }
+
+                // 空欄は「タイトルを見ない」という有効な状態なので、書かれている場合だけ検証する
+                if (!AppContextMatcher.TryValidateTitlePattern(item.AppTitlePattern, out error))
+                {
+                    invalidItem = item;
+                    return false;
+                }
             }
 
             invalidItem = null;
@@ -658,7 +725,11 @@ namespace MyTaskTray.ViewModels
             return item.Name.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
                 || item.Text.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
                 || item.Category.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
-                || item.ClipboardPattern.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase);
+                || item.ClipboardPattern.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
+
+                // アプリ条件で隠れている項目を「見当たらない」まま終わらせないため、検索でも見つかるようにする
+                || item.AppProcess.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
+                || item.AppTitlePattern.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase);
         }
 
         private void OnItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -698,6 +769,8 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.IsSeparator):
                 case nameof(ClipItem.ClipboardCondition):
                 case nameof(ClipItem.ClipboardPattern):
+                case nameof(ClipItem.AppProcess):
+                case nameof(ClipItem.AppTitlePattern):
                     IsDirty = true;
 
                     // 絞り込み中は表示件数が変わるため、件数の表示も作り直す
@@ -749,6 +822,11 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.ClipboardPattern):
                     OnPropertyChanged(nameof(Preview));
                     OnPropertyChanged(nameof(ClipboardConditionStatus));
+                    break;
+
+                case nameof(ClipItem.AppProcess):
+                case nameof(ClipItem.AppTitlePattern):
+                    OnPropertyChanged(nameof(AppConditionStatus));
                     break;
 
                 case nameof(ClipItem.SequenceValue):

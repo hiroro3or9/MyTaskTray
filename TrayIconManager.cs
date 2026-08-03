@@ -24,6 +24,9 @@ namespace MyTaskTray
         private const string ExitSeparatorName = "ExitSeparator";
         private const string ExitMenuItemName = "ExitMenuItem";
 
+        /// <summary>設定画面の「現在のアプリ ▾」に出す、直近に前面だったアプリの数。</summary>
+        private const int MaxRecentApps = 5;
+
         // 何もしない空のメッセージ。メニュー表示後の前面化を確定させるために送る
         private const int WmNull = 0x0000;
 
@@ -49,12 +52,22 @@ namespace MyTaskTray
         // メニューを出す前に前面化するためだけの窓。詳細は MenuHostWindow を参照
         private readonly MenuHostWindow _menuHost = new();
 
+        // 直近に前面だったアプリの実行ファイル名。設定画面の候補に出すためだけに使う。
+        // メモリ上にだけ置き、設定ファイルにも履歴にも残さない
+        private readonly List<string> _recentApps = [];
+
         private AppSettings _settings;
         private SettingsWindow? _settingsWindow;
+        private QuickAddWindow? _quickAddWindow;
         private GlobalHotKey? _menuHotKey;
         private ClipboardCaptureSession? _captureSession;
         private Icon? _icon;
         private bool _disposed;
+
+        // メニューを開く操作を受け取った時点の前面ウィンドウ。
+        // メニューを組み立てる時点では前面が自分に変わっているため、ここで覚えておく
+        private IntPtr _menuContextWindow;
+        private ForegroundApp _menuContext = ForegroundApp.Unknown;
 
         public TrayIconManager()
         {
@@ -70,6 +83,10 @@ namespace MyTaskTray
 
             // 左クリックでもメニューを出す（右クリックと同じ内容）
             _notifyIcon.MouseUp += OnIconMouseUp;
+
+            // 右クリックのメニューは NotifyIcon が自分で出すため ShowTrayMenu() を通らない。
+            // 前面アプリを覚えるのは、どちらのボタンでも押し下げの時点で行う
+            _notifyIcon.MouseDown += OnIconMouseDown;
 
             // Windows のテーマが変わったらメニューを作り直す
             ThemeManager.ThemeChanged += OnThemeChanged;
@@ -146,6 +163,64 @@ namespace MyTaskTray
         }
 
         /// <summary>
+        /// トレイアイコンを押した時点の前面ウィンドウを覚える。
+        /// 右クリックのメニューは <see cref="ShowTrayMenu"/> を通らないため、
+        /// 左右どちらのボタンでもここで捕まえる。
+        /// </summary>
+        private void OnIconMouseDown(object? sender, MouseEventArgs e)
+        {
+            if (e.Button is not (MouseButtons.Left or MouseButtons.Right))
+            {
+                return;
+            }
+
+            CaptureMenuContext();
+        }
+
+        /// <summary>
+        /// いま前面にあるウィンドウを、メニューの絞り込みとフォーカス復元のために覚える。
+        /// 自分自身（設定画面やメニュー用の窓）が前面だった場合は「対象なし」として扱う。
+        /// </summary>
+        private void CaptureMenuContext()
+        {
+            IntPtr window = GetForegroundWindow();
+            if (window == _menuHost.Handle)
+            {
+                window = IntPtr.Zero;
+            }
+
+            ForegroundApp app = ForegroundWindowInfo.Capture(window);
+
+            _menuContextWindow = window;
+            _menuContext = app;
+            RememberRecentApp(app);
+        }
+
+        /// <summary>メニューを閉じたあと、覚えていた前面ウィンドウを捨てる。</summary>
+        private void ClearMenuContext()
+        {
+            _menuContextWindow = IntPtr.Zero;
+            _menuContext = ForegroundApp.Unknown;
+        }
+
+        /// <summary>設定画面の候補に出すため、前面だったアプリを新しい順に数件だけ覚える。</summary>
+        private void RememberRecentApp(ForegroundApp app)
+        {
+            if (!app.IsKnown)
+            {
+                return;
+            }
+
+            _recentApps.RemoveAll(name => string.Equals(name, app.ProcessName, StringComparison.OrdinalIgnoreCase));
+            _recentApps.Insert(0, app.ProcessName);
+
+            while (_recentApps.Count > MaxRecentApps)
+            {
+                _recentApps.RemoveAt(_recentApps.Count - 1);
+            }
+        }
+
+        /// <summary>
         /// ホットキーが押されたときの入り口。
         /// ここは Windows のウィンドウプロシージャから直接呼ばれるため、
         /// 例外を外へ出すとメッセージループを巻き込んでアプリごと落ちる。必ずここで受け止める。
@@ -159,6 +234,8 @@ namespace MyTaskTray
 
             try
             {
+                // 前面化する前でなければ、利用者が作業していたウィンドウは取れない
+                CaptureMenuContext();
                 ShowTrayMenu(fromHotKey: true);
             }
             catch (Exception ex)
@@ -228,8 +305,15 @@ namespace MyTaskTray
         {
             // 前面化すると、それまで作業していたウィンドウからフォーカスが外れる。
             // このアプリは「コピーして、元の場所へ貼り付ける」ための道具なので、
-            // 閉じたあとに戻しておかないと Ctrl+V の行き先が変わってしまう
-            IntPtr previousForeground = GetForegroundWindow();
+            // 閉じたあとに戻しておかないと Ctrl+V の行き先が変わってしまう。
+            //
+            // 開く操作を受け取った時点で覚えたウィンドウがあればそちらを使う。
+            // トレイをクリックした場合、ここへ来るまでにタスクバーへ前面が移っていることがあり、
+            // 押し下げの時点で覚えたほうが「作業していたウィンドウ」に近い
+            IntPtr previousForeground = _menuContextWindow != IntPtr.Zero
+                ? _menuContextWindow
+                : GetForegroundWindow();
+
             if (previousForeground == _menuHost.Handle)
             {
                 previousForeground = IntPtr.Zero;
@@ -379,6 +463,11 @@ namespace MyTaskTray
             // スマートアクションは現在のクリップボードに応じて変わるため、
             // メニューを表示する直前に内容を組み立て直す。
             menu.Opening += (_, _) => PopulateMenu(menu);
+
+            // 覚えた前面ウィンドウを次に開くときまで持ち越さない。
+            // 古い情報で絞り込むと、原因の分からない「項目が消えた」になる
+            menu.Closed += (_, _) => ClearMenuContext();
+
             PopulateMenu(menu);
 
             ContextMenuStrip? old = _notifyIcon.ContextMenuStrip;
@@ -412,9 +501,18 @@ namespace MyTaskTray
 
             List<MenuEntry> regular = [];
             List<MenuEntry> smart = [];
+            int hiddenByApp = 0;
 
             foreach (ClipItem item in _settings.Items)
             {
+                // 前面アプリによる絞り込みは、スマートアクションかどうかに関わらず先に掛ける。
+                // 判定できない場合は AppContextMatcher が表示する側に倒す
+                if (!AppContextMatcher.Matches(item, _menuContext))
+                {
+                    hiddenByApp++;
+                    continue;
+                }
+
                 if (item.IsSeparator || item.ClipboardCondition == ClipboardMatchKind.Always)
                 {
                     regular.Add(new MenuEntry(item, EmptyCaptures));
@@ -447,7 +545,13 @@ namespace MyTaskTray
 
             if (regular.Count == 0 && smart.Count == 0 && _settings.Items.Count > 0)
             {
-                menu.Items.Add(new ToolStripMenuItem("(現在の内容に合うアクションはありません)")
+                // 何も出ない理由が「クリップボードの内容」なのか「前面のアプリ」なのかで、
+                // 次にやることが変わる。取り違えないよう文言を分ける
+                string reason = hiddenByApp > 0 && _menuContext.IsKnown
+                    ? $"({_menuContext.ProcessName} で表示する項目がありません)"
+                    : "(現在の内容に合うアクションはありません)";
+
+                menu.Items.Add(new ToolStripMenuItem(EscapeAmpersand(reason))
                 {
                     Enabled = false,
                 });
@@ -463,6 +567,8 @@ namespace MyTaskTray
             {
                 menu.Items.Add(new ToolStripSeparator());
             }
+
+            menu.Items.Add(CreateQuickAddItem());
 
             // 設定フォルダーを開く操作は設定画面に置いているため、メニューには出さない
             ToolStripMenuItem settingsItem = new("設定(&S)...");
@@ -983,22 +1089,170 @@ namespace MyTaskTray
             }
         }
 
-        private void TrySaveSettings()
+        /// <summary>
+        /// いまコピーしてある文字列を、そのまま項目として登録する入口。
+        /// 使えない状況でも項目自体は消さない。無いものを探させないため、無効にして理由を出す。
+        /// </summary>
+        private ToolStripMenuItem CreateQuickAddItem()
+        {
+            ToolStripMenuItem item = new("クリップボードを項目に追加(&A)...");
+
+            // この状態で追加して保存すると、読めなかった元の設定を既定値で置き換えてしまう
+            if (_settings.IsFallback)
+            {
+                item.Enabled = false;
+                item.ToolTipText = "設定を読み込めていないため追加できません";
+                return item;
+            }
+
+            if (!ClipboardService.HasText())
+            {
+                item.Enabled = false;
+                item.ToolTipText = "登録したい文字列をコピーしてから、もう一度開いてください";
+                return item;
+            }
+
+            item.ToolTipText = "いまコピーしてある文字列を、コピー項目として登録します";
+            item.Click += (_, _) => ShowQuickAdd();
+            return item;
+        }
+
+        /// <summary>クリップボードの内容を確かめ、名前を尋ねる窓を出す。</summary>
+        private void ShowQuickAdd()
+        {
+            if (_settings.IsFallback)
+            {
+                ToastWindow.ShowToast(
+                    "項目を追加できません",
+                    "設定ファイルを読み込めていないため、追加すると元の設定を失うおそれがあります");
+                return;
+            }
+
+            if (_quickAddWindow is not null)
+            {
+                _quickAddWindow.Activate();
+                return;
+            }
+
+            // 前後の空白と改行は落とす。コピー操作は行末や改行を巻き込みやすく、
+            // 見えない差で「同じ項目が 2 つ」になるのを避ける（{clip} の扱いとも揃う）
+            string clipboard = ClipboardService.GetText().Trim();
+            if (string.IsNullOrEmpty(clipboard))
+            {
+                ToastWindow.ShowToast(
+                    "クリップボードが空です",
+                    "登録したい文字列をコピーしてから、もう一度お試しください");
+                return;
+            }
+
+            // 波かっこをそのままにすると、JSON やソースコードの一部が差し込みとして評価される
+            string text = TemplateEngine.EscapeLiteral(clipboard);
+            bool escaped = TemplateEngine.NeedsEscaping(clipboard);
+
+            ClipItem? existing = FindItemByText(text);
+            if (existing is not null)
+            {
+                ToastWindow.ShowToast(
+                    "すでに同じ内容の項目があります",
+                    string.IsNullOrWhiteSpace(existing.Name)
+                        ? TemplateEngine.ToSingleLine(existing.Text, 60)
+                        : existing.Name);
+                return;
+            }
+
+            QuickAddWindow window = new(clipboard, escaped);
+            _quickAddWindow = window;
+            window.Closed += (_, _) =>
+            {
+                _quickAddWindow = null;
+                if (window.Accepted)
+                {
+                    AddQuickItem(text, window.ItemName, escaped);
+                }
+            };
+
+            window.Show();
+            window.Activate();
+        }
+
+        /// <summary>
+        /// 登録した項目を反映する。
+        /// 設定画面が開いている場合は、画面が開いた時点の複製を持っていて
+        /// 保存で上書きされてしまうため、ファイルではなく画面の一覧へ足す。
+        /// </summary>
+        private void AddQuickItem(string text, string name, bool escaped)
+        {
+            ClipItem item = new()
+            {
+                Id = ClipItem.NewId(),
+                Name = name.Trim(),
+                Text = text,
+            };
+
+            string escapeNote = escaped
+                ? "\n{ } はそのままの文字として登録しました"
+                : string.Empty;
+
+            if (_settingsWindow is not null)
+            {
+                _settingsWindow.AddItem(item);
+                ToastWindow.ShowToast(
+                    "設定画面に追加しました",
+                    "保存すると確定します" + escapeNote);
+                return;
+            }
+
+            _settings.Items.Add(item);
+
+            if (!TrySaveSettings())
+            {
+                _settings.Items.Remove(item);
+                ToastWindow.ShowToast(
+                    "項目を追加できませんでした",
+                    "設定ファイルに保存できません。他のソフトが使用している可能性があります");
+                return;
+            }
+
+            RebuildMenu();
+            ToastWindow.ShowToast(
+                "項目を追加しました",
+                (string.IsNullOrWhiteSpace(item.Name)
+                    ? TemplateEngine.ToSingleLine(item.Text, 60)
+                    : item.Name)
+                    + "\nメニューの末尾に追加しました。並べ替えは設定画面から行えます" + escapeNote);
+        }
+
+        /// <summary>同じ内容の項目が既にあるか探す。区切り線は対象外。</summary>
+        private ClipItem? FindItemByText(string text)
+            => _settings.Items.FirstOrDefault(
+                i => !i.IsSeparator && string.Equals(i.Text, text, StringComparison.Ordinal));
+
+        /// <summary>
+        /// 設定をファイルへ書き出す。保存できたかどうかを返す。
+        ///
+        /// <para>
+        /// 連番の保存では失敗してもコピー自体は成功しているため通知しないが、
+        /// 項目の追加では保存できなければ何も起きていないのと同じなので、
+        /// 呼び出し側が結果を見て知らせる。
+        /// </para>
+        /// </summary>
+        private bool TrySaveSettings()
         {
             // 設定ファイルを読めずに既定値で動いている状態では、
             // 連番の自動保存で利用者の設定を既定値に置き換えてしまう
             if (_settings.IsFallback)
             {
-                return;
+                return false;
             }
 
             try
             {
                 SettingsStore.Save(_settings);
+                return true;
             }
             catch (Exception)
             {
-                // 連番の保存に失敗してもコピー自体は成功しているため、通知はしない
+                return false;
             }
         }
 
@@ -1034,7 +1288,7 @@ namespace MyTaskTray
                 return;
             }
 
-            _settingsWindow = new SettingsWindow(_settings.Clone());
+            _settingsWindow = new SettingsWindow(_settings.Clone(), _recentApps);
             _settingsWindow.Closed += (_, _) =>
             {
                 bool saved = _settingsWindow?.Saved == true;
@@ -1228,6 +1482,7 @@ namespace MyTaskTray
             _menuHotKey?.Dispose();
             _menuHotKey = null;
             _notifyIcon.MouseUp -= OnIconMouseUp;
+            _notifyIcon.MouseDown -= OnIconMouseDown;
             _notifyIcon.Visible = false;
             _notifyIcon.ContextMenuStrip?.Dispose();
             _notifyIcon.Dispose();

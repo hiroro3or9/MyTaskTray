@@ -467,6 +467,29 @@ namespace MyTaskTray.Services
                 static (name, @base) => IsTimeSensitiveName(name) || IsTimeSensitiveName(@base),
                 0);
 
+        /// <summary>
+        /// 文字列を「そのままコピーされる」形に直す。
+        ///
+        /// <para>
+        /// 波かっこは差し込みの記号なので、コピーしてきた文字列（JSON やソースコードなど）を
+        /// そのまま項目にすると、一部が差し込みとして評価されてしまう。
+        /// <c>{{</c> <c>}}</c> のエスケープに直しておくと、書いたとおりの文字列がコピーされる。
+        /// </para>
+        /// </summary>
+        public static string EscapeLiteral(string? value)
+        {
+            if (string.IsNullOrEmpty(value) || !value.AsSpan().ContainsAny('{', '}'))
+            {
+                return value ?? string.Empty;
+            }
+
+            return value.Replace("{", "{{").Replace("}", "}}");
+        }
+
+        /// <summary>波かっこを含み、エスケープすると見た目が変わるかどうか。</summary>
+        public static bool NeedsEscaping(string? value)
+            => !string.IsNullOrEmpty(value) && value.AsSpan().ContainsAny('{', '}');
+
         private static bool IsSequenceName(string name)
             => name.Equals("seq", StringComparison.OrdinalIgnoreCase);
 

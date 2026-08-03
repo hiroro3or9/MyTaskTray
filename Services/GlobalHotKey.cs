@@ -12,9 +12,24 @@ namespace MyTaskTray.Services
         private const uint ModShift = 0x0004;
         private const uint ModWin = 0x0008;
 
+        /// <summary>無変換キー（VK_NONCONVERT）。</summary>
+        private const uint VkNonConvert = 0x1D;
+
+        /// <summary>
+        /// 修飾キーなしでも登録してよいキー。
+        ///
+        /// <para>
+        /// 通常の文字キーを単体で登録すると、そのキーが全アプリで打てなくなり、
+        /// 設定画面でも打てないため復旧できない。一方この一覧のキーは文字を入力しないので、
+        /// 単体で登録しても入力そのものは壊れない（そのキー本来の機能は奪う）。
+        /// </para>
+        /// </summary>
+        private static readonly uint[] StandaloneKeys = [VkNonConvert];
+
         /// <summary>
         /// Ctrl+Alt+V のような表記を解釈する。空欄は呼び出し側で「無効」として扱う。
         /// 通常の文字入力を奪わないよう、Ctrl / Alt / Win のいずれかを必須にする。
+        /// ただし <see cref="StandaloneKeys"/> のキーは単体でも登録できる。
         /// </summary>
         public static bool TryParse(string? text, out HotKeyGesture gesture, out string error)
         {
@@ -28,7 +43,7 @@ namespace MyTaskTray.Services
             }
 
             string[] parts = ToHalfWidth(text).Split('+', StringSplitOptions.TrimEntries);
-            if (parts.Length < 2 || parts.Any(string.IsNullOrEmpty))
+            if (parts.Any(string.IsNullOrEmpty))
             {
                 error = "Ctrl+Alt+V のように、キーを + で区切って入力してください。";
                 return false;
@@ -69,7 +84,7 @@ namespace MyTaskTray.Services
 
                 if (!TryParseKey(part, out virtualKey, out keyName))
                 {
-                    error = "キーは A〜Z、0〜9、F1〜F24 のいずれかを指定してください。";
+                    error = "キーは A〜Z、0〜9、F1〜F24、無変換 のいずれかを指定してください。";
                     return false;
                 }
             }
@@ -80,9 +95,10 @@ namespace MyTaskTray.Services
                 return false;
             }
 
-            if ((modifiers & (ModControl | ModAlt | ModWin)) == 0)
+            if ((modifiers & (ModControl | ModAlt | ModWin)) == 0
+                && !StandaloneKeys.Contains(virtualKey))
             {
-                error = "Ctrl、Alt、Win のいずれかを含めてください。";
+                error = "Ctrl、Alt、Win のいずれかを含めてください（無変換は単体でも指定できます）。";
                 return false;
             }
 
@@ -118,6 +134,15 @@ namespace MyTaskTray.Services
         private static bool TryParseKey(string text, out uint virtualKey, out string displayName)
         {
             string key = text.Trim().ToUpperInvariant();
+
+            // 無変換は日本語キーボードにしかないが、文字を入力しないキーなので
+            // 単体でもホットキーにできる。ローマ字での表記も受け付ける
+            if (key is "無変換" or "MUHENKAN" or "NONCONVERT")
+            {
+                virtualKey = VkNonConvert;
+                displayName = "無変換";
+                return true;
+            }
 
             if (key.Length == 1)
             {

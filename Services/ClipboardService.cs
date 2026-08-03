@@ -43,6 +43,28 @@ namespace MyTaskTray.Services
             return result;
         }
 
+        /// <summary>
+        /// クリップボードに文字列が入っていそうかどうか。
+        ///
+        /// <para>
+        /// 中身は読まないので <see cref="GetText"/> より軽く、他アプリのコピー操作を妨げにくい。
+        /// メニューの項目を有効にするかどうかの判定に使う。
+        /// 判定できなかった場合は true を返す。押せなくして「なぜか使えない」となるより、
+        /// 押した結果を通知で伝えるほうが分かりやすい。
+        /// </para>
+        /// </summary>
+        public static bool HasText()
+        {
+            try
+            {
+                return System.Windows.Clipboard.ContainsText();
+            }
+            catch (Exception)
+            {
+                return true;
+            }
+        }
+
         private static bool TryRun(Action action)
         {
             for (int attempt = 1; attempt <= MaxAttempts; attempt++)

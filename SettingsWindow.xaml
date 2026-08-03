@@ -46,6 +46,11 @@
                             <TextBlock Text="スマート" Style="{StaticResource BadgeText}" />
                         </Border>
                         <Border Style="{StaticResource Badge}"
+                                ToolTip="前面のアプリによって表示が変わります"
+                                Visibility="{Binding HasAppCondition, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="アプリ" Style="{StaticResource BadgeText}" />
+                        </Border>
+                        <Border Style="{StaticResource Badge}"
                                 Visibility="{Binding HasCategory, Converter={StaticResource BoolToVis}}">
                             <TextBlock Text="{Binding Category}" Style="{StaticResource BadgeText}"
                                        MaxWidth="90" TextTrimming="CharacterEllipsis" />
@@ -192,43 +197,86 @@
                             </Grid>
                         </StackPanel>
 
-                        <!-- スマートアクションの条件 -->
-                        <Expander x:Name="SmartActionExpander" Grid.Row="3" Margin="0,0,0,10"
-                                  Foreground="{DynamicResource Brush.Text}"
-                                  Header="スマートアクション（クリップボードに応じて表示）">
-                            <Border Margin="0,6,0,0" Padding="10,9" CornerRadius="6"
-                                    Background="{DynamicResource Brush.Surface.Alt}"
-                                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                                    TextElement.Foreground="{DynamicResource Brush.Text}">
-                                <StackPanel>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="180" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="表示条件" Margin="0,0,10,0"
-                                                   VerticalAlignment="Center" />
-                                        <ComboBox Grid.Column="1"
-                                                  ItemsSource="{Binding ClipboardMatchOptions}"
-                                                  DisplayMemberPath="Name" SelectedValuePath="Kind"
-                                                  SelectedValue="{Binding SelectedItem.ClipboardCondition, Mode=TwoWay}" />
-                                    </Grid>
+                        <StackPanel Grid.Row="3">
 
-                                    <StackPanel Margin="0,8,0,0"
-                                                Visibility="{Binding SelectedItem.IsRegexCondition, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="正規表現" Style="{StaticResource FieldLabel}" />
-                                        <TextBox x:Name="ClipboardPatternBox" FontFamily="Consolas, Yu Gothic UI"
-                                                 Text="{Binding SelectedItem.ClipboardPattern, UpdateSourceTrigger=PropertyChanged}"
-                                                 ToolTip="名前付きキャプチャは {match:名前} でコピー文字列に差し込めます" />
+                            <!-- スマートアクションの条件 -->
+                            <Expander x:Name="SmartActionExpander" Margin="0,0,0,10"
+                                      Foreground="{DynamicResource Brush.Text}"
+                                      Header="スマートアクション（クリップボードに応じて表示）">
+                                <Border Margin="0,6,0,0" Padding="10,9" CornerRadius="6"
+                                        Background="{DynamicResource Brush.Surface.Alt}"
+                                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                        TextElement.Foreground="{DynamicResource Brush.Text}">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="180" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="表示条件" Margin="0,0,10,0"
+                                                       VerticalAlignment="Center" />
+                                            <ComboBox Grid.Column="1"
+                                                      ItemsSource="{Binding ClipboardMatchOptions}"
+                                                      DisplayMemberPath="Name" SelectedValuePath="Kind"
+                                                      SelectedValue="{Binding SelectedItem.ClipboardCondition, Mode=TwoWay}" />
+                                        </Grid>
+
+                                        <StackPanel Margin="0,8,0,0"
+                                                    Visibility="{Binding SelectedItem.IsRegexCondition, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="正規表現" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="ClipboardPatternBox" FontFamily="Consolas, Yu Gothic UI"
+                                                     Text="{Binding SelectedItem.ClipboardPattern, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="名前付きキャプチャは {match:名前} でコピー文字列に差し込めます" />
+                                        </StackPanel>
+
+                                        <TextBlock Margin="0,7,0,0" TextWrapping="Wrap" FontSize="11"
+                                                   Foreground="{DynamicResource Brush.Text.Secondary}"
+                                                   Text="{Binding ClipboardConditionStatus}" />
                                     </StackPanel>
+                                </Border>
+                            </Expander>
 
-                                    <TextBlock Margin="0,7,0,0" TextWrapping="Wrap" FontSize="11"
-                                               Foreground="{DynamicResource Brush.Text.Secondary}"
-                                               Text="{Binding ClipboardConditionStatus}" />
-                                </StackPanel>
-                            </Border>
-                        </Expander>
+                            <!-- 前面アプリによる絞り込み -->
+                            <Expander x:Name="AppContextExpander" Margin="0,0,0,10"
+                                      Foreground="{DynamicResource Brush.Text}"
+                                      Header="表示するアプリ（前面のウィンドウに応じて表示）">
+                                <Border Margin="0,6,0,0" Padding="10,9" CornerRadius="6"
+                                        Background="{DynamicResource Brush.Surface.Alt}"
+                                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                        TextElement.Foreground="{DynamicResource Brush.Text}">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource FieldLabel}"
+                                                   Text="アプリ（実行ファイル名。カンマ区切りで複数指定できます）" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="AppProcessBox" Grid.Column="0"
+                                                     FontFamily="Consolas, Yu Gothic UI"
+                                                     Text="{Binding SelectedItem.AppProcess, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="例: chrome.exe, msedge.exe（.exe は省略できます）" />
+                                            <Button x:Name="AppPickButton" Grid.Column="1" Content="▾" Margin="5,0,0,0"
+                                                    Style="{StaticResource IconButton}"
+                                                    IsEnabled="{Binding HasKnownApps}"
+                                                    ToolTip="直近に前面だったアプリから選ぶ" Click="OnOpenAppPopup" />
+                                        </Grid>
+
+                                        <TextBlock Margin="0,8,0,0" Style="{StaticResource FieldLabel}"
+                                                   Text="ウィンドウタイトル（正規表現。空欄ならタイトルを見ません）" />
+                                        <TextBox x:Name="AppTitleBox" FontFamily="Consolas, Yu Gothic UI"
+                                                 Text="{Binding SelectedItem.AppTitlePattern, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="例: /issues/ （タイトルは言語やバージョンで変わることがあります）" />
+
+                                        <TextBlock Margin="0,7,0,0" TextWrapping="Wrap" FontSize="11"
+                                                   Foreground="{DynamicResource Brush.Text.Secondary}"
+                                                   Text="{Binding AppConditionStatus}" />
+                                    </StackPanel>
+                                </Border>
+                            </Expander>
+
+                        </StackPanel>
 
                         <Grid Grid.Row="4" Margin="0,0,0,4">
                             <TextBlock Text="クリップボードにコピーする文字列" VerticalAlignment="Center"
@@ -327,7 +375,7 @@
                 <StackPanel Margin="14">
                     <TextBlock Text="メニューを表示するホットキー" FontWeight="SemiBold" />
                     <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
-                               Text="Ctrl+Alt+V のように入力します。空欄なら無効です。通常の文字入力を妨げないよう、Ctrl / Alt / Win のいずれかを必ず含めてください。" />
+                               Text="Ctrl+Alt+V のように入力します。空欄なら無効です。通常の文字入力を妨げないよう、Ctrl / Alt / Win のいずれかを必ず含めてください。「無変換」だけは単体で指定できます。この欄で無変換キーを押すか muhenkan と打つと入ります（登録しているあいだ、無変換キー本来の働きは使えなくなります）。" />
                     <!--
                         日本語入力が有効なままだと「Ｃｔｒｌ＋Ｖ」のような全角になり、
                         見た目はほとんど同じなのに解釈だけ失敗する。この欄では IME を切る。
@@ -335,8 +383,9 @@
                     -->
                     <TextBox x:Name="HotKeyBox"
                              InputMethod.IsInputMethodEnabled="False"
+                             PreviewKeyDown="OnHotKeyBoxPreviewKeyDown"
                              Text="{Binding MenuHotKey, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="キーは A〜Z、0〜9、F1〜F24 を指定できます" />
+                             ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換 を指定できます" />
                     <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
                                Text="{Binding MenuHotKeyStatus}" />
                 </StackPanel>
@@ -454,6 +503,28 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
+            </Border>
+        </Popup>
+
+        <!-- 直近に前面だったアプリ -->
+        <Popup x:Name="AppPopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"
+               Placement="Bottom" PlacementTarget="{Binding ElementName=AppProcessBox}"
+               VerticalOffset="4"
+               PreviewKeyDown="OnPopupPreviewKeyDown">
+            <Border Style="{StaticResource PopupCard}" MinWidth="220" Margin="10">
+                <StackPanel Margin="8">
+                    <TextBlock Margin="4,2,4,6" FontSize="11" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Brush.Text.Secondary}"
+                               Text="トレイメニューを開いたときに前面だったアプリです。" />
+                    <ItemsControl ItemsSource="{Binding KnownApps}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource RowButton}" Click="OnPickApp"
+                                        Content="{Binding}" HorizontalContentAlignment="Left" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
             </Border>
         </Popup>
     </Grid>

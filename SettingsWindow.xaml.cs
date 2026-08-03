@@ -33,10 +33,18 @@ namespace MyTaskTray
         private ListBoxItem? _dropIndicatorTarget;
 
         public SettingsWindow(AppSettings settings)
+            : this(settings, [])
+        {
+        }
+
+        /// <param name="recentApps">
+        /// 直近に前面だったアプリの実行ファイル名。「現在のアプリ ▾」の候補に使う。
+        /// </param>
+        public SettingsWindow(AppSettings settings, IReadOnlyList<string> recentApps)
         {
             InitializeComponent();
 
-            _vm = new SettingsViewModel(settings);
+            _vm = new SettingsViewModel(settings, recentApps);
             DataContext = _vm;
 
             FolderButton.ToolTip = "設定ファイル: " + SettingsStore.FilePath;
@@ -78,6 +86,24 @@ namespace MyTaskTray
         /// </summary>
         public void NotifySequenceAdvanced(string id, int value) => _vm.AdoptSequenceValue(id, value);
 
+        /// <summary>
+        /// トレイの「クリップボードを項目に追加」で作られた項目を受け取る。
+        ///
+        /// <para>
+        /// この画面は開いた時点の複製を編集しているため、トレイ側がファイルへ保存しても
+        /// 保存の時点で消えてしまう。ファイルではなくこの一覧へ足し、
+        /// 「追加ボタンを押して貼り付けた」のと同じ未保存の状態にする。
+        /// </para>
+        /// </summary>
+        public void AddItem(ClipItem item)
+        {
+            ClearFilter();
+            _vm.Items.Add(item);
+            _vm.SelectedItem = item;
+            ItemsList.ScrollIntoView(item);
+            _vm.RefreshCategories();
+        }
+
         private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == nameof(SettingsViewModel.NeedsPreviewRefresh))
@@ -118,6 +144,7 @@ namespace MyTaskTray
         {
             _vm.RefreshCategories();
             SmartActionExpander.IsExpanded = _vm.SelectedItem?.HasSmartCondition == true;
+            AppContextExpander.IsExpanded = _vm.SelectedItem?.HasAppCondition == true;
         }
 
         private void OnAddItem(object sender, RoutedEventArgs e)
@@ -514,6 +541,63 @@ namespace MyTaskTray
             CategoryBox.CaretIndex = CategoryBox.Text.Length;
         }
 
+        /// <summary>
+        /// ホットキー欄で無変換キーを押したら、その名前を入力する。
+        ///
+        /// <para>
+        /// この欄は全角入力を避けるため IME を切っており、「無変換」という文字を打てない。
+        /// ローマ字（muhenkan）でも指定できるが、単体で使えるキーは押して入れられるほうが早い。
+        /// </para>
+        /// </summary>
+        private void OnHotKeyBoxPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.ImeNonConvert)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            _vm.MenuHotKey = "無変換";
+            HotKeyBox.CaretIndex = HotKeyBox.Text.Length;
+        }
+
+        private void OnOpenAppPopup(object sender, RoutedEventArgs e)
+        {
+            if (!_vm.HasKnownApps)
+            {
+                return;
+            }
+
+            AppPopup.IsOpen = true;
+        }
+
+        /// <summary>
+        /// 候補のアプリを入力欄へ入れる。既に書かれている場合はカンマで足す
+        /// （「ブラウザ 2 つのどちらでも」のような指定が多いため）。
+        /// </summary>
+        private void OnPickApp(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { DataContext: string app } || _vm.SelectedItem is null)
+            {
+                return;
+            }
+
+            AppPopup.IsOpen = false;
+
+            string current = _vm.SelectedItem.AppProcess.Trim();
+            bool already = AppContextMatcher
+                .SplitProcessNames(current)
+                .Any(name => AppContextMatcher.MatchesProcess(name, app));
+
+            if (!already)
+            {
+                _vm.SelectedItem.AppProcess = current.Length == 0 ? app : current + ", " + app;
+            }
+
+            AppProcessBox.Focus();
+            AppProcessBox.CaretIndex = AppProcessBox.Text.Length;
+        }
+
         private void OnPopupPreviewKeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key != Key.Escape)
@@ -523,6 +607,7 @@ namespace MyTaskTray
 
             InsertPopup.IsOpen = false;
             CategoryPopup.IsOpen = false;
+            AppPopup.IsOpen = false;
             HotKeyPopup.IsOpen = false;
             SprintPopup.IsOpen = false;
             e.Handled = true;
@@ -702,8 +787,14 @@ namespace MyTaskTray
 
             if (!_vm.TryValidateSmartConditions(out ClipItem? invalidItem, out string conditionError))
             {
+                // 正規表現はスマートアクションとアプリ条件の両方にあるため、
+                // どちらの入力欄を直せばよいかを見分けてから案内する
+                bool appProblem = invalidItem is not null
+                    && !AppContextMatcher.TryValidateTitlePattern(invalidItem.AppTitlePattern, out _);
+
                 MessageBox.Show(
-                    "スマートアクションの表示条件を保存できません。\n" + conditionError,
+                    (appProblem ? "表示するアプリの条件を保存できません。\n" : "スマートアクションの表示条件を保存できません。\n")
+                        + conditionError,
                     "MyTaskTray",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
@@ -715,12 +806,14 @@ namespace MyTaskTray
                     ItemsList.ScrollIntoView(invalidItem);
                 }
 
-                SmartActionExpander.IsExpanded = true;
+                SmartActionExpander.IsExpanded = !appProblem;
+                AppContextExpander.IsExpanded = appProblem;
                 Dispatcher.BeginInvoke(
                     new Action(() =>
                     {
-                        ClipboardPatternBox.Focus();
-                        ClipboardPatternBox.SelectAll();
+                        TextBox target = appProblem ? AppTitleBox : ClipboardPatternBox;
+                        target.Focus();
+                        target.SelectAll();
                     }),
                     DispatcherPriority.Input);
                 return false;
@@ -769,6 +862,10 @@ namespace MyTaskTray
 
                 // 見た目で区別できない前後の空白でカテゴリが分かれないようにする
                 item.Category = item.Category.Trim();
+
+                // アプリ条件は空欄が「条件なし」を意味するため、空白だけの入力は空にそろえる
+                item.AppProcess = item.AppProcess.Trim();
+                item.AppTitlePattern = item.AppTitlePattern.Trim();
 
                 if (item.SequenceStep == 0)
                 {
@@ -872,10 +969,12 @@ namespace MyTaskTray
             // ポップアップ側の PreviewKeyDown には届かず、
             // ここで拾わないと IsCancel のキャンセルボタンが反応して設定画面ごと閉じてしまう。
             if (e.Key == Key.Escape
-                && (InsertPopup.IsOpen || CategoryPopup.IsOpen || HotKeyPopup.IsOpen || SprintPopup.IsOpen))
+                && (InsertPopup.IsOpen || CategoryPopup.IsOpen || AppPopup.IsOpen
+                    || HotKeyPopup.IsOpen || SprintPopup.IsOpen))
             {
                 InsertPopup.IsOpen = false;
                 CategoryPopup.IsOpen = false;
+                AppPopup.IsOpen = false;
                 HotKeyPopup.IsOpen = false;
                 SprintPopup.IsOpen = false;
                 e.Handled = true;
