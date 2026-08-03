@@ -903,8 +903,8 @@ namespace MyTaskTray
             Func<string> clipboard,
             IReadOnlyDictionary<string, string> captures)
         {
-            IReadOnlyList<string> inputNames = TemplateEngine.GetInputNames(item.Text);
-            if (inputNames.Count == 0)
+            IReadOnlyList<InputCaptureDefinition> inputs = TemplateEngine.GetInputDefinitions(item.Text);
+            if (inputs.Count == 0)
             {
                 CopyToClipboard(item, clipboard, null, captures);
                 return;
@@ -912,20 +912,34 @@ namespace MyTaskTray
 
             bool preserveClipboard = item.HasSmartCondition || TemplateEngine.ContainsClipboard(item.Text);
             string sourceClipboard = preserveClipboard ? clipboard() : string.Empty;
-            StartCapture(item, inputNames, sourceClipboard, captures);
+            StartCapture(item, inputs, sourceClipboard, captures);
         }
 
         private void StartCapture(
             ClipItem item,
-            IReadOnlyList<string> inputNames,
+            IReadOnlyList<InputCaptureDefinition> inputs,
             string sourceClipboard,
             IReadOnlyDictionary<string, string> captures)
         {
             CancelCapture(showToast: false, rebuildMenu: false);
 
+            foreach (InputCaptureDefinition input in inputs)
+            {
+                foreach (string pattern in input.Patterns)
+                {
+                    if (!TemplateEngine.TryValidateInputPattern(pattern, out string error))
+                    {
+                        ToastWindow.ShowToast(
+                            $"入力「{input.Name}」の正規表現が正しくありません",
+                            TemplateEngine.ToSingleLine(error, 100));
+                        return;
+                    }
+                }
+            }
+
             ClipboardCaptureSession? session = null;
             session = new ClipboardCaptureSession(
-                inputNames,
+                inputs,
                 progressed: progress =>
                 {
                     if (!ReferenceEquals(_captureSession, session))
@@ -958,9 +972,14 @@ namespace MyTaskTray
                     RebuildMenu();
                     ToastWindow.ShowToast("複数入力をキャンセルしました", "2 分間コピーがなかったため終了しました");
                 },
-                rejected: name => ToastWindow.ShowToast(
-                    $"入力: {name}",
-                    "文字列をコピーしてください。空またはテキスト以外の内容は入力として使えません"));
+                rejected: rejection =>
+                {
+                    string message = rejection.FailedPattern is null
+                        ? "文字列をコピーしてください。空またはテキスト以外の内容は入力として使えません"
+                        : $"正規表現 /{TemplateEngine.ToSingleLine(rejection.FailedPattern, 70)}/ "
+                            + "に一致しません。別の文字列をコピーしてください";
+                    ToastWindow.ShowToast($"入力: {rejection.Progress.CurrentName}", message);
+                });
 
             _captureSession = session;
             if (!session.Start())
@@ -978,10 +997,16 @@ namespace MyTaskTray
 
         private static void ShowCapturePrompt(ClipboardCaptureProgress progress, string title)
         {
+            string condition = progress.Patterns.Count == 0
+                ? string.Empty
+                : $"\n条件: /{TemplateEngine.ToSingleLine(progress.Patterns[0], 70)}/"
+                    + (progress.Patterns.Count > 1 ? $" ほか {progress.Patterns.Count - 1} 件" : string.Empty);
+
             ToastWindow.ShowToast(
                 title,
                 $"{progress.CapturedCount + 1}/{progress.TotalCount}: "
-                    + $"「{progress.CurrentName}」に入れる文字列をコピーしてください");
+                    + $"「{progress.CurrentName}」に入れる文字列をコピーしてください"
+                    + condition);
         }
 
         private void CancelCapture(bool showToast, bool rebuildMenu)

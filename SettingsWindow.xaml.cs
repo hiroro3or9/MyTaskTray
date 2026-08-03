@@ -680,7 +680,8 @@ namespace MyTaskTray
             if (_vm.SelectedItem is { UsesInputs: true })
             {
                 MessageBox.Show(
-                    "{input:名前} を含む項目は、トレイメニューから選んでコピー操作を行うと完成します。",
+                    "{input:名前} を含む項目は、トレイメニューから選んでコピー操作を行うと完成します。\n"
+                        + "正規表現で絞り込む場合は {input:名前:/正規表現/} と書けます。",
                     "MyTaskTray",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

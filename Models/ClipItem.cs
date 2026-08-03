@@ -157,7 +157,7 @@ namespace MyTaskTray.Models
         [JsonIgnore]
         public bool UsesSequence => TemplateEngine.ContainsSequence(Text);
 
-        /// <summary><c>{input:名前}</c> による複数回キャプチャを使うかどうか。</summary>
+        /// <summary><c>{input:名前}</c>（正規表現付きも含む）による複数回キャプチャを使うかどうか。</summary>
         [JsonIgnore]
         public bool UsesInputs => TemplateEngine.GetInputNames(Text).Count > 0;
 

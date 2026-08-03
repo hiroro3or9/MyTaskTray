@@ -11,6 +11,14 @@ namespace MyTaskTray.Services
     public sealed record PlaceholderInfo(string Token, string Group, string Description);
 
     /// <summary>
+    /// 1 回のコピー操作で受け取る入力。
+    /// <paramref name="Patterns"/> があれば、すべての正規表現に一致する文字列だけを受け付ける。
+    /// </summary>
+    internal sealed record InputCaptureDefinition(
+        string Name,
+        IReadOnlyList<string> Patterns);
+
+    /// <summary>
     /// スプリント（一定の日数で繰り返す期間）の区切り。
     /// <paramref name="AnchorDate"/> はどれか 1 つのスプリントの開始日で、
     /// そこから <paramref name="LengthDays"/> 日ごとに区切りが並んでいるものとして扱う。
@@ -117,6 +125,7 @@ namespace MyTaskTray.Services
             new("{clip:upper}", "クリップボード", "大文字にする（lower で小文字）"),
             new("{clip:raw}", "クリップボード", "空白や改行も含めてそのまま"),
             new("{input:名前}", "複数入力", "項目を選んだあと、名前ごとにコピーした値を順番に差し込む"),
+            new("{input:Issue URL:/issues/(\\d+)/}", "複数入力", "正規表現に一致する入力だけを受け取り、かっこの中身を差し込む"),
             new("{match:名前}", "スマートアクション", "正規表現などの表示条件で取り出した値を差し込む"),
             new("{date@clip:yyyyMMdd}", "クリップボードの日付",
                 "コピーしてある日付を別の書式にする（2026/08/15 → 20260815）"),
@@ -255,15 +264,29 @@ namespace MyTaskTray.Services
         /// 同じ名前は大文字小文字を区別せず 1 回だけ返す。
         /// </summary>
         public static IReadOnlyList<string> GetInputNames(string template)
+            => GetInputDefinitions(template).Select(static input => input.Name).ToArray();
+
+        /// <summary>
+        /// テンプレートに現れる入力を、最初に現れた順で返す。
+        /// 同じ名前は大文字小文字を区別せず 1 回にまとめ、
+        /// <c>{input:名前:/正規表現/}</c> の条件が複数あればすべて保持する。
+        /// </summary>
+        internal static IReadOnlyList<InputCaptureDefinition> GetInputDefinitions(string template)
         {
             List<string> names = [];
-            HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-            CollectInputNames(template, names, seen, 0);
-            return names;
+            Dictionary<string, List<string>> patterns = new(StringComparer.OrdinalIgnoreCase);
+            CollectInputDefinitions(template, names, patterns, 0);
+
+            return names
+                .Select(name => new InputCaptureDefinition(name, patterns[name].ToArray()))
+                .ToArray();
         }
 
-        private static void CollectInputNames(
-            string template, List<string> names, HashSet<string> seen, int depth)
+        private static void CollectInputDefinitions(
+            string template,
+            List<string> names,
+            Dictionary<string, List<string>> patterns,
+            int depth)
         {
             if (string.IsNullOrEmpty(template) || depth > MaxDepth)
             {
@@ -290,21 +313,79 @@ namespace MyTaskTray.Services
                 }
 
                 string inner = template[(i + 1)..close];
-                if (TryGetNamedValue(inner, "input", out string inputName))
+                if (TryParseInputToken(inner, out string inputName, out string? pattern))
                 {
-                    if (seen.Add(inputName))
+                    if (!patterns.TryGetValue(inputName, out List<string>? inputPatterns))
                     {
                         names.Add(inputName);
+                        inputPatterns = [];
+                        patterns[inputName] = inputPatterns;
+                    }
+
+                    if (pattern is not null
+                        && !inputPatterns.Contains(pattern, StringComparer.Ordinal))
+                    {
+                        inputPatterns.Add(pattern);
                     }
                 }
                 else
                 {
                     // {calc:{input:金額}*1.1} のような入れ子も拾う。
-                    CollectInputNames(inner, names, seen, depth + 1);
+                    CollectInputDefinitions(inner, names, patterns, depth + 1);
                 }
 
                 i = close;
             }
+        }
+
+        /// <summary>
+        /// <c>input:名前</c> または <c>input:名前:/正規表現/</c> を解析する。
+        /// 正規表現は <c>{clip:/…/}</c> と同じくスラッシュで囲み、
+        /// 最初のキャプチャがあればその値、なければ一致全体を差し込む。
+        /// </summary>
+        private static bool TryParseInputToken(
+            string inner,
+            out string name,
+            out string? pattern)
+        {
+            const string Prefix = "input:";
+            string trimmed = inner.Trim();
+            if (!trimmed.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                name = string.Empty;
+                pattern = null;
+                return false;
+            }
+
+            string body = trimmed[Prefix.Length..].Trim();
+            int patternSeparator = body.IndexOf(":/", StringComparison.Ordinal);
+
+            if (patternSeparator < 0)
+            {
+                name = body;
+                pattern = null;
+            }
+            else
+            {
+                if (body.Length <= patternSeparator + 2 || body[^1] != '/')
+                {
+                    name = string.Empty;
+                    pattern = null;
+                    return false;
+                }
+
+                name = body[..patternSeparator].Trim();
+                pattern = body[(patternSeparator + 2)..^1];
+                if (pattern.Length == 0)
+                {
+                    name = string.Empty;
+                    pattern = null;
+                    return false;
+                }
+            }
+
+            return name.Length is >= 1 and <= 80
+                && name.IndexOfAny(['{', '}', '\r', '\n']) < 0;
         }
 
         private static bool TryGetNamedValue(string inner, string tokenName, out string value)
@@ -657,14 +738,16 @@ namespace MyTaskTray.Services
                     case "input":
                         RejectBase(name, hasBase);
                         RejectOffset(name, hasOffset);
-                        if (!TryGetNamedValue(trimmed, "input", out string inputName)
+                        if (!TryParseInputToken(trimmed, out string inputName, out string? inputPattern)
                             || context.Inputs is null
                             || !context.Inputs.TryGetValue(inputName, out string? inputValue))
                         {
                             return original;
                         }
 
-                        return inputValue;
+                        return inputPattern is null
+                            ? inputValue
+                            : ExtractByRegex(inputValue, inputPattern, original);
 
                     case "match":
                         RejectBase(name, hasBase);
@@ -995,10 +1078,18 @@ namespace MyTaskTray.Services
         /// <c>ID-(\d+)</c> のように「目印＋取り出したい部分」と書ける。
         /// </summary>
         private static string ExtractByRegex(string value, string pattern, string original)
+            => TryExtractByRegex(value, pattern, out string extracted) ? extracted : original;
+
+        /// <summary>
+        /// 正規表現に最初に一致した部分（キャプチャがあれば最初のキャプチャ）を返す。
+        /// 入力キャプチャ時の検証と、テンプレート展開で同じ規則を使うための共通処理。
+        /// </summary>
+        internal static bool TryExtractByRegex(string value, string pattern, out string extracted)
         {
+            extracted = string.Empty;
             if (string.IsNullOrEmpty(pattern))
             {
-                return original;
+                return false;
             }
 
             try
@@ -1007,15 +1098,32 @@ namespace MyTaskTray.Services
 
                 if (!m.Success)
                 {
-                    return original;
+                    return false;
                 }
 
-                return m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value;
+                extracted = m.Groups.Count > 1 && m.Groups[1].Success ? m.Groups[1].Value : m.Value;
+                return true;
             }
             catch (Exception)
             {
                 // 正規表現が誤っている、または照合が長引いて打ち切られた場合
-                return original;
+                return false;
+            }
+        }
+
+        /// <summary>入力に書かれた正規表現を、キャプチャ開始前に検証する。</summary>
+        internal static bool TryValidateInputPattern(string pattern, out string error)
+        {
+            try
+            {
+                _ = new Regex(pattern, RegexOptions.CultureInvariant, RegexTimeout);
+                error = string.Empty;
+                return true;
+            }
+            catch (ArgumentException ex)
+            {
+                error = ex.Message;
+                return false;
             }
         }
 

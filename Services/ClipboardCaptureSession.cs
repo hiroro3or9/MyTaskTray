@@ -8,7 +8,13 @@ namespace MyTaskTray.Services
     internal readonly record struct ClipboardCaptureProgress(
         int CapturedCount,
         int TotalCount,
-        string CurrentName);
+        string CurrentName,
+        IReadOnlyList<string> Patterns);
+
+    /// <summary>入力を受け取らなかった理由。正規表現が null なら空・非テキスト。</summary>
+    internal readonly record struct ClipboardCaptureRejection(
+        ClipboardCaptureProgress Progress,
+        string? FailedPattern);
 
     /// <summary>
     /// <c>{input:名前}</c> の値を、利用者の通常のコピー操作から順番に受け取る一時セッション。
@@ -20,12 +26,12 @@ namespace MyTaskTray.Services
         private static readonly IntPtr MessageOnlyWindow = new(-3);
         private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
 
-        private readonly IReadOnlyList<string> _names;
+        private readonly IReadOnlyList<InputCaptureDefinition> _inputs;
         private readonly Dictionary<string, string> _values = new(StringComparer.OrdinalIgnoreCase);
         private readonly Action<ClipboardCaptureProgress> _progressed;
         private readonly Action<IReadOnlyDictionary<string, string>> _completed;
         private readonly Action _timedOut;
-        private readonly Action<string> _rejected;
+        private readonly Action<ClipboardCaptureRejection> _rejected;
         private readonly HwndSource _source;
         private readonly DispatcherTimer _timer;
 
@@ -36,18 +42,18 @@ namespace MyTaskTray.Services
         private bool _sourceDisposed;
 
         public ClipboardCaptureSession(
-            IReadOnlyList<string> names,
+            IReadOnlyList<InputCaptureDefinition> inputs,
             Action<ClipboardCaptureProgress> progressed,
             Action<IReadOnlyDictionary<string, string>> completed,
             Action timedOut,
-            Action<string> rejected)
+            Action<ClipboardCaptureRejection> rejected)
         {
-            if (names.Count == 0)
+            if (inputs.Count == 0)
             {
-                throw new ArgumentException("入力名を 1 つ以上指定してください。", nameof(names));
+                throw new ArgumentException("入力を 1 つ以上指定してください。", nameof(inputs));
             }
 
-            _names = names;
+            _inputs = inputs;
             _progressed = progressed;
             _completed = completed;
             _timedOut = timedOut;
@@ -70,7 +76,7 @@ namespace MyTaskTray.Services
         }
 
         public ClipboardCaptureProgress Progress
-            => new(_index, _names.Count, _names[_index]);
+            => new(_index, _inputs.Count, _inputs[_index].Name, _inputs[_index].Patterns);
 
         /// <summary>クリップボード変更通知の受信を始める。登録できなければ false。</summary>
         public bool Start()
@@ -107,14 +113,26 @@ namespace MyTaskTray.Services
                 if (string.IsNullOrWhiteSpace(value))
                 {
                     RestartTimer();
-                    _rejected(_names[_index]);
+                    _rejected(new ClipboardCaptureRejection(Progress, null));
                     return IntPtr.Zero;
                 }
 
-                _values[_names[_index]] = value.Trim();
+                string trimmed = value.Trim();
+                InputCaptureDefinition input = _inputs[_index];
+                foreach (string pattern in input.Patterns)
+                {
+                    if (!TemplateEngine.TryExtractByRegex(trimmed, pattern, out _))
+                    {
+                        RestartTimer();
+                        _rejected(new ClipboardCaptureRejection(Progress, pattern));
+                        return IntPtr.Zero;
+                    }
+                }
+
+                _values[input.Name] = trimmed;
                 _index++;
 
-                if (_index >= _names.Count)
+                if (_index >= _inputs.Count)
                 {
                     Dictionary<string, string> completed = new(_values, StringComparer.OrdinalIgnoreCase);
                     // WndProc の処理中に HwndSource 自体を破棄すると、呼び出し元の
