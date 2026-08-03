@@ -328,7 +328,13 @@
                     <TextBlock Text="メニューを表示するホットキー" FontWeight="SemiBold" />
                     <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
                                Text="Ctrl+Alt+V のように入力します。空欄なら無効です。通常の文字入力を妨げないよう、Ctrl / Alt / Win のいずれかを必ず含めてください。" />
+                    <!--
+                        日本語入力が有効なままだと「Ｃｔｒｌ＋Ｖ」のような全角になり、
+                        見た目はほとんど同じなのに解釈だけ失敗する。この欄では IME を切る。
+                        （それでも全角が入りうるため、解釈側でも半角へ揃えている）
+                    -->
                     <TextBox x:Name="HotKeyBox"
+                             InputMethod.IsInputMethodEnabled="False"
                              Text="{Binding MenuHotKey, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="キーは A〜Z、0〜9、F1〜F24 を指定できます" />
                     <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"

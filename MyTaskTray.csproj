@@ -15,7 +15,7 @@
       SYSLIB1054: DllImport ではなく LibraryImport を使う提案。
       LibraryImport が生成するマーシャリングコードは unsafe を含むため
       AllowUnsafeBlocks が必要になるが、その利点（Native AOT / トリミング対応）は
-      WPF アプリでは得られない。P/Invoke は 2 つだけで呼び出し頻度も低く、
+      WPF アプリでは得られない。P/Invoke はごく少数で呼び出し頻度も低く、
       プロジェクト全体で unsafe を許可するほどの理由がないため抑制する。
     -->
     <NoWarn>$(NoWarn);SYSLIB1054</NoWarn>

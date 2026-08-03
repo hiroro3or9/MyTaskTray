@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Interop;
 
 namespace MyTaskTray.Services
@@ -26,7 +27,7 @@ namespace MyTaskTray.Services
                 return false;
             }
 
-            string[] parts = text.Split('+', StringSplitOptions.TrimEntries);
+            string[] parts = ToHalfWidth(text).Split('+', StringSplitOptions.TrimEntries);
             if (parts.Length < 2 || parts.Any(string.IsNullOrEmpty))
             {
                 error = "Ctrl+Alt+V のように、キーを + で区切って入力してください。";
@@ -94,6 +95,24 @@ namespace MyTaskTray.Services
 
             gesture = new HotKeyGesture(modifiers, virtualKey, string.Join("+", displayParts));
             return true;
+        }
+
+        /// <summary>
+        /// 全角の英数字・記号・空白を半角へ揃える。
+        /// 日本語入力を有効にしたまま打つと「Ｃｔｒｌ＋Ｖ」のような全角になるが、
+        /// 見た目はほとんど同じで解釈だけ失敗するため、利用者には理由が分からない。
+        /// </summary>
+        private static string ToHalfWidth(string text)
+        {
+            try
+            {
+                return text.Normalize(NormalizationForm.FormKC);
+            }
+            catch (ArgumentException)
+            {
+                // 正規化できない文字を含む場合はそのまま読み、後続の検証で弾く
+                return text;
+            }
         }
 
         private static bool TryParseKey(string text, out uint virtualKey, out string displayName)
@@ -174,7 +193,17 @@ namespace MyTaskTray.Services
             if (message == WmHotKey && wParam.ToInt32() == HotKeyId)
             {
                 handled = true;
-                _pressed();
+
+                // ここはウィンドウプロシージャの中で、例外を外へ出すと
+                // WPF のメッセージループを巻き込んでアプリごと終了してしまう。
+                // 利用者への通知は呼び出し側の責務とし、ここでは外へ漏らさないことだけを保証する
+                try
+                {
+                    _pressed();
+                }
+                catch (Exception)
+                {
+                }
             }
 
             return IntPtr.Zero;

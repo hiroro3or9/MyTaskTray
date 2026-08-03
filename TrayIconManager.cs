@@ -1,9 +1,11 @@
+using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms;
+using System.Windows.Threading;
 using MyTaskTray.Models;
 using MyTaskTray.Services;
 
@@ -18,6 +20,12 @@ namespace MyTaskTray
         private const int MenuTextMaxLength = 40;
         private const string ExitSeparatorName = "ExitSeparator";
         private const string ExitMenuItemName = "ExitMenuItem";
+
+        // 何もしない空のメッセージ。メニュー表示後の前面化を確定させるために送る
+        private const int WmNull = 0x0000;
+
+        // SetWindowLongPtr でウィンドウの「オーナー」を指す位置
+        private const int GwlHwndParent = -8;
 
         private static readonly IReadOnlyDictionary<string, string> EmptyCaptures
             = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -34,12 +42,15 @@ namespace MyTaskTray
             BindingFlags.Instance | BindingFlags.NonPublic);
 
         private readonly NotifyIcon _notifyIcon;
+
+        // メニューを出す前に前面化するためだけの窓。詳細は MenuHostWindow を参照
+        private readonly MenuHostWindow _menuHost = new();
+
         private AppSettings _settings;
         private SettingsWindow? _settingsWindow;
         private GlobalHotKey? _menuHotKey;
         private ClipboardCaptureSession? _captureSession;
         private Icon? _icon;
-        private bool _hideExitWhileMenuOpen;
         private bool _disposed;
 
         public TrayIconManager()
@@ -92,7 +103,7 @@ namespace MyTaskTray
 
             try
             {
-                _menuHotKey = new GlobalHotKey(gesture, () => ShowTrayMenu(atCursor: true));
+                _menuHotKey = new GlobalHotKey(gesture, ShowMenuFromHotKey);
                 if (_menuHotKey.IsRegistered)
                 {
                     return;
@@ -132,12 +143,38 @@ namespace MyTaskTray
         }
 
         /// <summary>
+        /// ホットキーが押されたときの入り口。
+        /// ここは Windows のウィンドウプロシージャから直接呼ばれるため、
+        /// 例外を外へ出すとメッセージループを巻き込んでアプリごと落ちる。必ずここで受け止める。
+        /// </summary>
+        private void ShowMenuFromHotKey()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                ShowTrayMenu(fromHotKey: true);
+            }
+            catch (Exception ex)
+            {
+                ToastWindow.ShowToast("メニューを表示できませんでした", ex.Message);
+            }
+        }
+
+        /// <summary>
         /// 左クリックで右クリックと同じメニューを出す。
         /// 単に <c>ContextMenuStrip.Show</c> を呼ぶと、アプリが前面にならないため
         /// 別の場所をクリックしてもメニューが閉じない。NotifyIcon が右クリック時に
         /// 使っている内部処理を呼び、閉じる挙動と表示位置を右クリックに合わせる。
         /// </summary>
-        private void ShowTrayMenu(bool atCursor = false)
+        /// <param name="fromHotKey">
+        /// グローバルホットキーから開いたかどうか。キーボードだけで選べるよう先頭項目を選択し、
+        /// 手元を見ずに Enter を押しても終了しないよう「終了」を隠す。
+        /// </param>
+        private void ShowTrayMenu(bool fromHotKey = false)
         {
             ContextMenuStrip? menu = _notifyIcon.ContextMenuStrip;
             if (menu is null)
@@ -145,14 +182,14 @@ namespace MyTaskTray
                 return;
             }
 
-            // すでに開いているときは閉じる（クリックでの開閉）
+            // すでに開いているときは閉じる（クリック・ホットキーでの開閉）
             if (menu.Visible)
             {
                 menu.Close(ToolStripDropDownCloseReason.AppFocusChange);
                 return;
             }
 
-            if (!atCursor)
+            if (!fromHotKey)
             {
                 try
                 {
@@ -169,30 +206,141 @@ namespace MyTaskTray
                 }
             }
 
-            if (atCursor)
+            ShowMenuAtCursor(menu, fromHotKey);
+        }
+
+        /// <summary>
+        /// カーソル位置にメニューを出す。ホットキー経路と、内部処理を呼べなかったときの
+        /// フォールバックの両方で使う。
+        ///
+        /// <para>
+        /// <c>ContextMenuStrip.Show</c> を呼ぶだけではアプリが前面にならないため、
+        /// 他所をクリックしてもメニューが閉じず、矢印キーや Enter も別のアプリへ行ってしまう。
+        /// NotifyIcon が右クリック時に踏んでいるのと同じ手順
+        /// ――「画面に出ない窓を前面化 → 表示 → その窓へ空メッセージを送る」――
+        /// を再現して、通常のコンテキストメニューと同じ挙動にする。
+        /// </para>
+        /// </summary>
+        private void ShowMenuAtCursor(ContextMenuStrip menu, bool fromHotKey)
+        {
+            // 前面化すると、それまで作業していたウィンドウからフォーカスが外れる。
+            // このアプリは「コピーして、元の場所へ貼り付ける」ための道具なので、
+            // 閉じたあとに戻しておかないと Ctrl+V の行き先が変わってしまう
+            IntPtr previousForeground = GetForegroundWindow();
+            if (previousForeground == _menuHost.Handle)
             {
-                _hideExitWhileMenuOpen = true;
-
-                void RestoreExitItems(object? sender, ToolStripDropDownClosedEventArgs e)
-                {
-                    menu.Closed -= RestoreExitItems;
-                    _hideExitWhileMenuOpen = false;
-                }
-
-                menu.Closed += RestoreExitItems;
+                previousForeground = IntPtr.Zero;
             }
 
-            // ホットキーでは作業中の画面にあるカーソル位置へ表示する。
-            // 通常クリックのフォールバックでも同じ経路を使う。
-            menu.Show(System.Windows.Forms.Cursor.Position);
+            // 表示より先に前面化する。ホットキー経路は WM_HOTKEY を受け取った直後なので、
+            // Windows のフォアグラウンド制限を通過できる。
+            // 通らなくてもメニュー自体は出るため、結果は見ない
+            _ = SetForegroundWindow(_menuHost.Handle);
 
-            // 前面に持ってこられなくてもメニュー自体は出ているため、結果は見ない
-            _ = SetForegroundWindow(menu.Handle);
+            // 「終了」を隠すのは、この 1 回の表示に対してだけ。
+            // フィールドで状態を持たせると、表示中のメニュー作り直しや例外で true が残り、
+            // 次にトレイをクリックして開いたときまで隠れてしまう
+            void HideExitOnce(object? sender, CancelEventArgs e)
+            {
+                menu.Opening -= HideExitOnce;
+                HideExitItems(menu);
+            }
 
-            if (atCursor)
+            void RestoreForegroundOnce(object? sender, ToolStripDropDownClosedEventArgs e)
+            {
+                menu.Closed -= RestoreForegroundOnce;
+                RestoreForeground(previousForeground);
+            }
+
+            if (fromHotKey)
+            {
+                // RebuildMenu が登録した PopulateMenu より後に呼ばれるため、
+                // 組み立て終わったあとの項目を隠せる
+                menu.Opening += HideExitOnce;
+            }
+
+            try
+            {
+                menu.Show(System.Windows.Forms.Cursor.Position);
+            }
+            finally
+            {
+                // Opening が呼ばれないまま抜けた場合に備えて確実に外す（二重の解除は無害）
+                menu.Opening -= HideExitOnce;
+            }
+
+            // 表示できたあとで購読する。Show が例外で抜けた場合に
+            // 購読だけが残って、次に閉じたときへ持ち越されるのを避ける
+            menu.Closed += RestoreForegroundOnce;
+
+            // オーナーを与えないと、メニューが独立したウィンドウとみなされて
+            // タスクバーにボタンが現れることがある
+            SetMenuOwner(menu.Handle, _menuHost.Handle);
+
+            // 前面化を確定させるための空メッセージ。これがないとメニューが閉じ残ることがある
+            _ = PostMessage(_menuHost.Handle, WmNull, IntPtr.Zero, IntPtr.Zero);
+
+            if (fromHotKey)
             {
                 // ホットキーを押した手をマウスへ移さず、矢印キーと Enter で選べるようにする
                 SelectFirstEnabledItem(menu.Items);
+            }
+        }
+
+        /// <summary>
+        /// メニューを出す前に前面だったウィンドウへフォーカスを戻す。
+        ///
+        /// <para>
+        /// 閉じる処理の途中では戻しきれないため、いったんメッセージを処理し終えてから行う。
+        /// また、戻すのは「前面がまだ自分の見えない窓のまま」のときだけにする。
+        /// 設定画面を開いた場合のように別のウィンドウが正当にフォーカスを取っていたり、
+        /// Windows が自分で元のウィンドウへ戻していたりする場合は、何もしないほうが正しい。
+        /// </para>
+        /// </summary>
+        private void RestoreForeground(IntPtr window)
+        {
+            if (window == IntPtr.Zero || !IsWindow(window))
+            {
+                return;
+            }
+
+            System.Windows.Application? app = System.Windows.Application.Current;
+            if (app is null)
+            {
+                return;
+            }
+
+            IntPtr host = _menuHost.Handle;
+
+            app.Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                new Action(() =>
+                {
+                    if (GetForegroundWindow() != host || !IsWindow(window))
+                    {
+                        return;
+                    }
+
+                    _ = SetForegroundWindow(window);
+                }));
+        }
+
+        /// <summary>
+        /// ホットキーから開いたメニューでは「終了」とその手前の区切り線を隠す。
+        /// 取り除かずに <c>Available</c> だけを落とすので、次に開くときは元に戻る。
+        /// </summary>
+        private static void HideExitItems(ContextMenuStrip menu)
+        {
+            ToolStripItem? separator = menu.Items[ExitSeparatorName];
+            if (separator is not null)
+            {
+                separator.Available = false;
+            }
+
+            ToolStripItem? exit = menu.Items[ExitMenuItemName];
+            if (exit is not null)
+            {
+                exit.Available = false;
             }
         }
 
@@ -324,11 +472,7 @@ namespace MyTaskTray
             exitItem.Click += (_, _) => ExitApplication();
             menu.Items.Add(exitItem);
 
-            if (_hideExitWhileMenuOpen)
-            {
-                menu.Items[ExitSeparatorName]?.Available = false;
-                menu.Items[ExitMenuItemName]?.Available = false;
-            }
+            // ホットキーから開いた場合は、この直後に ShowMenuAtCursor が「終了」を隠す
 
             // 動的に追加したサブメニューにも現在の配色を適用する。
             TrayMenuTheme.Apply(menu);
@@ -901,9 +1045,46 @@ namespace MyTaskTray
             return (Icon)SystemIcons.Application.Clone();
         }
 
+        /// <summary>
+        /// メニューの所有者を、画面に出ないウィンドウに設定する。
+        /// 32bit の user32.dll には SetWindowLongPtrW が無いため、呼び分ける。
+        /// </summary>
+        private static void SetMenuOwner(IntPtr menuHandle, IntPtr ownerHandle)
+        {
+            if (menuHandle == IntPtr.Zero || ownerHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            if (IntPtr.Size == 8)
+            {
+                _ = SetWindowLongPtr(menuHandle, GwlHwndParent, ownerHandle);
+                return;
+            }
+
+            _ = SetWindowLong(menuHandle, GwlHwndParent, ownerHandle.ToInt32());
+        }
+
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool PostMessage(IntPtr hWnd, int message, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+        private static extern int SetWindowLong(IntPtr hWnd, int index, int value);
 
         public void Dispose()
         {
@@ -923,6 +1104,7 @@ namespace MyTaskTray
             _notifyIcon.Dispose();
             _icon?.Dispose();
             _icon = null;
+            _menuHost.Dispose();
         }
     }
 }
