@@ -36,10 +36,12 @@ namespace MyTaskTray.Services
         private const uint VkControl = 0x11;
         private const uint VkLControl = 0xA2;
         private const uint VkRControl = 0xA3;
+        private const uint VkC = 0x43;
         private const uint VkV = 0x56;
         private const uint LlkhfInjected = 0x00000010;
         private static readonly IntPtr MessageOnlyWindow = new(-3);
         private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan CopyIntentLifetime = TimeSpan.FromSeconds(2);
 
         private readonly Action<string, int> _captured;
         private readonly Action _captureRejected;
@@ -57,10 +59,13 @@ namespace MyTaskTray.Services
         private int _pasteIndex;
         private bool _listening;
         private bool _handlingClipboard;
+        private bool _copyKeyDown;
         private bool _pasteKeyDown;
         private bool _completionPending;
         private bool _disposed;
         private bool _sourceDisposed;
+        private long _copyIntentExpiresAt;
+        private uint _copyIntentSequenceNumber;
 
         public SequentialCopyPasteSession(
             Action<string, int> captured,
@@ -177,6 +182,13 @@ namespace MyTaskTray.Services
                 return IntPtr.Zero;
             }
 
+            // WM_CLIPBOARDUPDATE は Ctrl+C だけでなく、クリップボード所有元の終了や
+            // 遅延レンダリングでも届く。直前に実際の Ctrl+C があった更新だけを収集する。
+            if (!TryConsumeCopyIntent())
+            {
+                return IntPtr.Zero;
+            }
+
             handled = true;
             _handlingClipboard = true;
             try
@@ -212,12 +224,34 @@ namespace MyTaskTray.Services
             try
             {
                 KeyboardHookData data = Marshal.PtrToStructure<KeyboardHookData>(lParam);
-                if (data.VirtualKey != VkV || (data.Flags & LlkhfInjected) != 0)
+                if ((data.VirtualKey is not (VkC or VkV))
+                    || (data.Flags & LlkhfInjected) != 0)
                 {
                     return CallNextHookEx(_keyboardHook, code, wParam, lParam);
                 }
 
                 int message = wParam.ToInt32();
+                if (data.VirtualKey == VkC)
+                {
+                    if (message is WmKeyUp or WmSysKeyUp)
+                    {
+                        _copyKeyDown = false;
+                        return CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                    }
+
+                    if (message is WmKeyDown or WmSysKeyDown
+                        && IsControlDown()
+                        && !_copyKeyDown)
+                    {
+                        // キーリピートでは再登録しない。同じ内容を改めて Ctrl+C した場合は、
+                        // キーを離した後の次の押下になるため別の 1 件として収集できる。
+                        _copyKeyDown = true;
+                        ArmCopyIntent();
+                    }
+
+                    return CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                }
+
                 if (message is WmKeyUp or WmSysKeyUp)
                 {
                     _pasteKeyDown = false;
@@ -309,6 +343,7 @@ namespace MyTaskTray.Services
         private void BeginPasting()
         {
             Phase = SequentialCopyPastePhase.Pasting;
+            ClearCopyIntent();
             StopListening();
             RestartTimer();
         }
@@ -331,6 +366,36 @@ namespace MyTaskTray.Services
 
         private static bool IsKeyDown(uint virtualKey)
             => (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
+
+        private void ArmCopyIntent()
+        {
+            // すでにキューへ入っていた古い WM_CLIPBOARDUPDATE を誤って拾わないよう、
+            // Ctrl+C を押した時点のシーケンス番号も覚える。
+            _copyIntentSequenceNumber = GetClipboardSequenceNumber();
+            Interlocked.Exchange(
+                ref _copyIntentExpiresAt,
+                Environment.TickCount64 + (long)CopyIntentLifetime.TotalMilliseconds);
+        }
+
+        private bool TryConsumeCopyIntent()
+        {
+            long expiresAt = Interlocked.Exchange(ref _copyIntentExpiresAt, 0);
+            if (expiresAt == 0 || Environment.TickCount64 > expiresAt)
+            {
+                return false;
+            }
+
+            uint currentSequence = GetClipboardSequenceNumber();
+
+            // 取得不能時の 0 は時刻条件だけで判定する。通常は番号が変わったことまで確認し、
+            // Ctrl+C より前に発生してキューへ残っていた通知を除外する。
+            return currentSequence == 0
+                || _copyIntentSequenceNumber == 0
+                || currentSequence != _copyIntentSequenceNumber;
+        }
+
+        private void ClearCopyIntent()
+            => Interlocked.Exchange(ref _copyIntentExpiresAt, 0);
 
         private void RestartTimer()
         {
@@ -363,6 +428,7 @@ namespace MyTaskTray.Services
             }
 
             _disposed = true;
+            ClearCopyIntent();
             _timer.Stop();
             _timer.Tick -= OnTimeout;
             StopListening();
@@ -407,6 +473,9 @@ namespace MyTaskTray.Services
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetClipboardSequenceNumber();
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr SetWindowsHookEx(

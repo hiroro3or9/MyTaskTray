@@ -79,7 +79,8 @@ WinForms の `ToolStripMenuItem` は作らず、表示判断と描画を分離�
 
 ## 5. 表示設定
 
-設定画面の「作業ツールの表示」では、組み込みアクションごとに表示・非表示を切り替えられる。
+設定画面の「アクションの表示」では、組み込みアクションを実際の表示先ごとに分け、
+アクションごとに表示・非表示を切り替えられる。
 状態は `AppSettings.ActionStates` に安定 ID と真偽値の組として保存する。
 
 - ID が設定ファイルにない場合は、アクション定義の `DefaultEnabled` を使う
@@ -98,7 +99,7 @@ WinForms の `ToolStripMenuItem` は作らず、表示判断と描画を分離�
 
 例:
 
-- 空行除外: `Contextual`、グループ `text-transform`。空行を含む文字列のときだけ表示
+- 空行除外: `OneShot`、グループ `text-transform`。作業ツールへ常設し、対象外なら理由付きで無効化
 - JSON Minify・整形: `Contextual`、グループ `json-transform`。JSON のときだけ表示
 - 複数回操作する処理: `Session` とし、`ActionSessionManager` へ登録してから開始する
 

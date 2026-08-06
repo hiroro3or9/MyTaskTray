@@ -73,6 +73,27 @@
                 </Grid>
             </Grid>
         </DataTemplate>
+
+        <!-- 組み込みアクションの表示設定 1 件 -->
+        <DataTemplate x:Key="ActionSettingTemplate">
+            <CheckBox IsChecked="{Binding IsVisible}" Margin="2,5"
+                      HorizontalContentAlignment="Stretch">
+                <Grid Width="400">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Description}" Margin="0,2,0,0"
+                                   Style="{StaticResource Hint}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding Group}"
+                               VerticalAlignment="Top" Margin="6,1,0,0"
+                               Foreground="{DynamicResource Brush.Text.Secondary}" />
+                </Grid>
+            </CheckBox>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid>
@@ -382,10 +403,10 @@
                 <Button x:Name="HotKeyButton" Content="ホットキーの設定" Margin="16,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenHotKeySettings"
                         ToolTip="トレイメニューを表示するグローバルホットキーを設定します" />
-                <Button x:Name="ActionSettingsButton" Content="作業ツールの表示" Margin="8,0,0,0"
+                <Button x:Name="ActionSettingsButton" Content="アクションの表示" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenActionSettings"
                         IsEnabled="{Binding HasActionSettings}"
-                        ToolTip="組み込みアクションをメニューに表示するか選びます" />
+                        ToolTip="組み込みアクションの表示と、表示されるメニューを確認します" />
                 <Button x:Name="SprintButton" Content="スプリントの設定" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenSprintSettings"
                         ToolTip="{}{date@sprint} などが参照する基準日と長さを決めます" />
@@ -425,41 +446,38 @@
             </Border>
         </Popup>
 
-        <!-- 組み込み作業ツールの表示設定 -->
+        <!-- 組み込みアクションの表示設定 -->
         <Popup x:Name="ActionSettingsPopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"
                Placement="Top" PlacementTarget="{Binding ElementName=ActionSettingsButton}"
                VerticalOffset="-4" HorizontalOffset="-10"
                PreviewKeyDown="OnPopupPreviewKeyDown">
             <Border Style="{StaticResource PopupCard}" Width="470" Margin="10">
                 <StackPanel Margin="14">
-                    <TextBlock Text="作業ツールの表示" FontWeight="SemiBold" />
+                    <TextBlock Text="アクションの表示" FontWeight="SemiBold" />
                     <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
-                               Text="チェックした機能を「作業ツール」や「この内容でできること」に表示します。実行中の作業は、完了またはキャンセルまで先頭に表示されます。" />
+                               Text="チェックした機能を、下に示すメニューへ表示します。実行中の作業は、完了またはキャンセルまで先頭に表示されます。" />
 
                     <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding ActionSettings}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox IsChecked="{Binding IsVisible}" Margin="2,5"
-                                              HorizontalContentAlignment="Stretch">
-                                        <Grid Width="400">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                                <TextBlock Text="{Binding Description}" Margin="0,2,0,0"
-                                                           Style="{StaticResource Hint}" TextWrapping="Wrap" />
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding Group}"
-                                                       VerticalAlignment="Top" Margin="6,1,0,0"
-                                                       Foreground="{DynamicResource Brush.Text.Secondary}" />
-                                        </Grid>
-                                    </CheckBox>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel>
+                            <StackPanel Visibility="{Binding HasWorkToolActionSettings, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="作業ツール" FontSize="14" FontWeight="SemiBold" />
+                                <TextBlock Margin="0,2,0,3" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                                           Text="通常時に、メニュー下部の「作業ツール」へ表示されます。" />
+                                <ItemsControl ItemsSource="{Binding WorkToolActionSettings}"
+                                              ItemTemplate="{StaticResource ActionSettingTemplate}" />
+                            </StackPanel>
+
+                            <Border Height="1" Margin="0,10,0,10"
+                                    Background="{DynamicResource Brush.Separator}" />
+
+                            <StackPanel Visibility="{Binding HasContextualActionSettings, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="この内容でできること" FontSize="14" FontWeight="SemiBold" />
+                                <TextBlock Margin="0,2,0,3" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                                           Text="クリップボードが条件に合うときだけ、メニュー上部へ表示されます。" />
+                                <ItemsControl ItemsSource="{Binding ContextualActionSettings}"
+                                              ItemTemplate="{StaticResource ActionSettingTemplate}" />
+                            </StackPanel>
+                        </StackPanel>
                     </ScrollViewer>
                 </StackPanel>
             </Border>

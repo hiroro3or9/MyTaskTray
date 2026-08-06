@@ -114,13 +114,22 @@ namespace MyTaskTray
                 GroupOrder: 200,
                 Order: 100,
                 AccessKey: 'B',
-                Kind: TrayActionKind.Contextual,
+                Kind: TrayActionKind.OneShot,
                 DefaultEnabled: true,
                 AllowDuringSession: false,
-                Evaluate: context => !string.IsNullOrWhiteSpace(context.Clipboard)
-                    && ClipboardTextActions.HasBlankLines(context.Clipboard)
+                Evaluate: context =>
+                {
+                    if (string.IsNullOrWhiteSpace(context.Clipboard))
+                    {
+                        return TrayActionAvailability.Disabled(
+                            "空行を含む文字列をコピーしてから実行してください");
+                    }
+
+                    return ClipboardTextActions.HasBlankLines(context.Clipboard)
                         ? TrayActionAvailability.Enabled
-                        : TrayActionAvailability.Hidden,
+                        : TrayActionAvailability.Disabled(
+                            "コピーした文字列に除外できる空行がありません");
+                },
                 Execute: context => CopyBuiltInActionResult(
                     "空行を除外しました",
                     ClipboardTextActions.RemoveBlankLines(context.Clipboard))));

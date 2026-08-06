@@ -131,10 +131,24 @@ namespace MyTaskTray.ViewModels
             Items = new ObservableCollection<ClipItem>(settings.Items);
             KnownCategories = [];
             KnownApps = [.. recentApps];
-            ActionSettings = new ObservableCollection<ActionSettingRow>(
-                actions.Select(action => new ActionSettingRow(
+            (TrayActionDefinition Action, ActionSettingRow Row)[] actionRows =
+            [
+                .. actions.Select(action => (
                     action,
-                    settings.IsActionVisible(action.Id, action.DefaultEnabled))));
+                    new ActionSettingRow(
+                        action,
+                        settings.IsActionVisible(action.Id, action.DefaultEnabled)))),
+            ];
+            ActionSettings = new ObservableCollection<ActionSettingRow>(
+                actionRows.Select(entry => entry.Row));
+            WorkToolActionSettings = new ObservableCollection<ActionSettingRow>(
+                actionRows
+                    .Where(entry => entry.Action.Kind != TrayActionKind.Contextual)
+                    .Select(entry => entry.Row));
+            ContextualActionSettings = new ObservableCollection<ActionSettingRow>(
+                actionRows
+                    .Where(entry => entry.Action.Kind == TrayActionKind.Contextual)
+                    .Select(entry => entry.Row));
             foreach (ActionSettingRow action in ActionSettings)
             {
                 action.PropertyChanged += OnActionSettingChanged;
@@ -197,10 +211,20 @@ namespace MyTaskTray.ViewModels
         /// </summary>
         public ObservableCollection<string> KnownApps { get; }
 
-        /// <summary>組み込み作業ツールの表示設定。</summary>
+        /// <summary>すべての組み込みアクションの表示設定。保存と変更検知に使う。</summary>
         public ObservableCollection<ActionSettingRow> ActionSettings { get; }
 
+        /// <summary>メニュー下部の「作業ツール」に表示されるアクション。</summary>
+        public ObservableCollection<ActionSettingRow> WorkToolActionSettings { get; }
+
+        /// <summary>条件に合うと「この内容でできること」に表示されるアクション。</summary>
+        public ObservableCollection<ActionSettingRow> ContextualActionSettings { get; }
+
         public bool HasActionSettings => ActionSettings.Count > 0;
+
+        public bool HasWorkToolActionSettings => WorkToolActionSettings.Count > 0;
+
+        public bool HasContextualActionSettings => ContextualActionSettings.Count > 0;
 
         /// <summary>候補に出せる前面アプリがあるかどうか。</summary>
         public bool HasKnownApps => KnownApps.Count > 0;
