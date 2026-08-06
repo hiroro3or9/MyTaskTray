@@ -22,6 +22,7 @@ namespace MyTaskTray.Models
         private string _clipboardPattern = string.Empty;
         private string _appProcess = string.Empty;
         private string _appTitlePattern = string.Empty;
+        private ClipFormat _format;
 
         /// <summary>
         /// 項目を識別する ID。連番カウンターの引き継ぎに使う。
@@ -59,6 +60,30 @@ namespace MyTaskTray.Models
                 nameof(UsesSequence),
                 nameof(UsesInputs));
         }
+
+        /// <summary>
+        /// クリップボードへ載せるときの形式。
+        /// 既定の <see cref="ClipFormat.Plain"/> は従来どおりプレーンテキストだけを載せる。
+        /// 設定ファイルに書かれていなければこの値になるので、古い設定の挙動は変わらない。
+        /// </summary>
+        public ClipFormat Format
+        {
+            get => _format;
+            set => Set(ref _format, value, nameof(Format), nameof(HasFormat), nameof(FormatLabel));
+        }
+
+        /// <summary>プレーンテキスト以外の形式が指定されているかどうか（バッジの表示に使う）。</summary>
+        [JsonIgnore]
+        public bool HasFormat => Format != ClipFormat.Plain;
+
+        /// <summary>形式を画面や通知に出すときの短い名前。</summary>
+        [JsonIgnore]
+        public string FormatLabel => Format switch
+        {
+            ClipFormat.Html => "HTML",
+            ClipFormat.Markdown => "Markdown",
+            _ => string.Empty,
+        };
 
         /// <summary>
         /// クリップボードの内容に応じて項目を表示する条件。
@@ -250,6 +275,7 @@ namespace MyTaskTray.Models
             Name = Name,
             Text = Text,
             Category = Category,
+            Format = Format,
             IsSeparator = IsSeparator,
             SequenceValue = SequenceValue,
             SequenceStep = SequenceStep,

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    DESIGN_RICH_COPY.md の §9「実機で確認が必要なこと」を試すための確認用ツール。
+    本体には含めない。単体で dotnet run して手で確かめるためのもの。
+
+    本体と同じ System.Windows.Clipboard を使う必要があるため UseWPF を有効にする。
+    WinForms 側の Clipboard とは挙動が違う可能性があるので、
+    本体が使う API と同じもので確認しないと意味がない。
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>ClipboardProbe</RootNamespace>
+    <AssemblyName>ClipboardProbe</AssemblyName>
+
+    <!-- 本体と同じ理由で、DllImport を LibraryImport に置き換える提案は抑制する -->
+    <NoWarn>$(NoWarn);SYSLIB1054</NoWarn>
+  </PropertyGroup>
+
+</Project>

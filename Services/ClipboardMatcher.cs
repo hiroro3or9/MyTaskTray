@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using MyTaskTray.Models;
 
@@ -25,7 +24,6 @@ namespace MyTaskTray.Services
     /// <summary>クリップボードの文字列が、スマートアクションの表示条件に合うか判定する。</summary>
     internal static partial class ClipboardMatcher
     {
-        private const int MaxJsonLength = 1024 * 1024;
         private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(200);
 
         [GeneratedRegex(
@@ -114,26 +112,9 @@ namespace MyTaskTray.Services
 
         private static ClipboardMatchResult MatchJson(string value)
         {
-            if (value.Length is 0 or > MaxJsonLength || value[0] is not ('{' or '['))
-            {
-                return ClipboardMatchResult.NoMatch;
-            }
-
-            try
-            {
-                using JsonDocument document = JsonDocument.Parse(value, new JsonDocumentOptions
-                {
-                    AllowTrailingCommas = true,
-                    CommentHandling = JsonCommentHandling.Skip,
-                    MaxDepth = 64,
-                });
-
-                return ClipboardMatchResult.Matched(value);
-            }
-            catch (JsonException)
-            {
-                return ClipboardMatchResult.NoMatch;
-            }
+            return ClipboardTextActions.IsJsonObjectOrArray(value)
+                ? ClipboardMatchResult.Matched(value)
+                : ClipboardMatchResult.NoMatch;
         }
 
         private static ClipboardMatchResult MatchFilePath(string value)

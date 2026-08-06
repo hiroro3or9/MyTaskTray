@@ -14,6 +14,52 @@ namespace MyTaskTray.ViewModels
         string Name,
         string Description);
 
+    /// <summary>コピーする形式の選択肢。</summary>
+    public sealed record ClipFormatOption(
+        ClipFormat Format,
+        string Name,
+        string Description);
+
+    /// <summary>設定画面に表示する、組み込みアクション 1 件の表示設定。</summary>
+    public sealed class ActionSettingRow : INotifyPropertyChanged
+    {
+        private bool _isVisible;
+
+        internal ActionSettingRow(TrayActionDefinition action, bool isVisible)
+        {
+            Id = action.Id;
+            Name = action.Label;
+            Description = action.ToolTip;
+            Group = action.GroupLabel;
+            _isVisible = isVisible;
+        }
+
+        public string Id { get; }
+
+        public string Name { get; }
+
+        public string Description { get; }
+
+        public string Group { get; }
+
+        public bool IsVisible
+        {
+            get => _isVisible;
+            set
+            {
+                if (_isVisible == value)
+                {
+                    return;
+                }
+
+                _isVisible = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsVisible)));
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
+
     /// <summary>
     /// 設定画面のためのビューモデル。
     /// </summary>
@@ -26,6 +72,7 @@ namespace MyTaskTray.ViewModels
         private const int MaxSprintLengthDays = 730;
 
         private readonly ICollectionView _itemsView;
+        private readonly Dictionary<string, bool> _actionStates;
 
         // 画面上で「次の番号」を直接編集した項目の Id。
         // 設定画面を開いている間にトレイ側で連番が進んでいた場合、
@@ -59,15 +106,24 @@ namespace MyTaskTray.ViewModels
         private string _clipboard = string.Empty;
 
         public SettingsViewModel(AppSettings settings)
-            : this(settings, [])
+            : this(settings, [], [])
         {
         }
 
         public SettingsViewModel(AppSettings settings, IReadOnlyList<string> recentApps)
+            : this(settings, recentApps, [])
+        {
+        }
+
+        internal SettingsViewModel(
+            AppSettings settings,
+            IReadOnlyList<string> recentApps,
+            IReadOnlyList<TrayActionDefinition> actions)
         {
             Version = settings.Version;
             _showCopyNotification = settings.ShowCopyNotification;
             _menuHotKey = settings.MenuHotKey ?? string.Empty;
+            _actionStates = new(settings.ActionStates ?? [], StringComparer.Ordinal);
             _sprintAnchorText = settings.SprintAnchorDate?.ToString(SprintDateFormat, CultureInfo.InvariantCulture)
                 ?? string.Empty;
             _sprintLengthText = settings.SprintLengthDays.ToString(CultureInfo.InvariantCulture);
@@ -75,6 +131,15 @@ namespace MyTaskTray.ViewModels
             Items = new ObservableCollection<ClipItem>(settings.Items);
             KnownCategories = [];
             KnownApps = [.. recentApps];
+            ActionSettings = new ObservableCollection<ActionSettingRow>(
+                actions.Select(action => new ActionSettingRow(
+                    action,
+                    settings.IsActionVisible(action.Id, action.DefaultEnabled))));
+            foreach (ActionSettingRow action in ActionSettings)
+            {
+                action.PropertyChanged += OnActionSettingChanged;
+            }
+
             Placeholders = new ObservableCollection<PlaceholderRow>(
                 TemplateEngine.Placeholders.Select(p => new PlaceholderRow(p)));
             ClipboardMatchOptions =
@@ -88,6 +153,22 @@ namespace MyTaskTray.ViewModels
                 new(ClipboardMatchKind.FilePath, "Windowsのパス", "ドライブ文字または UNC で始まるパスのとき表示します。"),
                 new(ClipboardMatchKind.Email, "メールアドレス", "メールアドレスの形に一致するとき表示します。"),
                 new(ClipboardMatchKind.Regex, "正規表現", "指定した正規表現に一致するとき表示します。"),
+            ];
+            ClipFormatOptions =
+            [
+                new(
+                    ClipFormat.Plain,
+                    "そのまま",
+                    "書いた文字列をそのままコピーします。"),
+                new(
+                    ClipFormat.Markdown,
+                    "Markdown",
+                    "書いた内容を Markdown として解釈します。Word や Slack へ貼ると "
+                        + "見出しや箇条書きになり、エディタへ貼ると書いたままの文字列が入ります。"),
+                new(
+                    ClipFormat.Html,
+                    "HTML",
+                    "書いた内容を HTML として扱います。タグを直接書きたい場合に使います。"),
             ];
 
             _itemsView = CollectionViewSource.GetDefaultView(Items);
@@ -116,6 +197,11 @@ namespace MyTaskTray.ViewModels
         /// </summary>
         public ObservableCollection<string> KnownApps { get; }
 
+        /// <summary>組み込み作業ツールの表示設定。</summary>
+        public ObservableCollection<ActionSettingRow> ActionSettings { get; }
+
+        public bool HasActionSettings => ActionSettings.Count > 0;
+
         /// <summary>候補に出せる前面アプリがあるかどうか。</summary>
         public bool HasKnownApps => KnownApps.Count > 0;
 
@@ -124,6 +210,28 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>スマートアクションの表示条件として選べる一覧。</summary>
         public IReadOnlyList<ClipboardMatchOption> ClipboardMatchOptions { get; }
+
+        /// <summary>コピーする形式として選べる一覧。</summary>
+        public IReadOnlyList<ClipFormatOption> ClipFormatOptions { get; }
+
+        /// <summary>選択項目の形式の説明。何が起きるかを短く出す。</summary>
+        public string ClipFormatStatus
+        {
+            get
+            {
+                if (SelectedItem is null || SelectedItem.IsSeparator)
+                {
+                    return string.Empty;
+                }
+
+                ClipFormatOption? option = ClipFormatOptions.FirstOrDefault(
+                    o => o.Format == SelectedItem.Format);
+
+                return option is null
+                    ? "保存されている形式を解釈できません。形式を選び直してください。"
+                    : option.Description;
+            }
+        }
 
         /// <summary>
         /// ユーザーが画面上で連番の値を直接編集した項目の <see cref="ClipItem.Id"/>。
@@ -389,6 +497,7 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(NeedsPreviewRefresh));
                 OnPropertyChanged(nameof(ClipboardConditionStatus));
                 OnPropertyChanged(nameof(AppConditionStatus));
+                OnPropertyChanged(nameof(ClipFormatStatus));
             }
         }
 
@@ -537,7 +646,12 @@ namespace MyTaskTray.ViewModels
                     () => _clipboard,
                     Sprint,
                     null,
-                    match.IsMatch ? match.Captures : null);
+                    match.IsMatch ? match.Captures : null,
+
+                    // 実際にコピーされる文字列を出すのが目的なので、
+                    // 形式ごとの後処理もここで通しておく。通さないと、
+                    // HTML の項目でプレビューと実際のコピー内容が食い違う
+                    ClipboardService.GetValueTransform(SelectedItem.Format));
             }
         }
 
@@ -658,11 +772,18 @@ namespace MyTaskTray.ViewModels
         /// </summary>
         public AppSettings ToSettings(string normalizedMenuHotKey, SprintSchedule? validatedSprint)
         {
+            Dictionary<string, bool> actionStates = new(_actionStates, StringComparer.Ordinal);
+            foreach (ActionSettingRow action in ActionSettings)
+            {
+                actionStates[action.Id] = action.IsVisible;
+            }
+
             return new()
             {
                 Version = Version,
                 ShowCopyNotification = ShowCopyNotification,
                 MenuHotKey = normalizedMenuHotKey,
+                ActionStates = actionStates,
                 SprintAnchorDate = validatedSprint?.AnchorDate,
                 SprintLengthDays = validatedSprint?.LengthDays ?? 14,
                 Items = [.. Items.Select(i => i.Clone())],
@@ -671,6 +792,17 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>保存が完了したことを伝える。</summary>
         public void MarkSaved() => IsDirty = false;
+
+        private void OnActionSettingChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (sender is not ActionSettingRow action || e.PropertyName != nameof(ActionSettingRow.IsVisible))
+            {
+                return;
+            }
+
+            _actionStates[action.Id] = action.IsVisible;
+            IsDirty = true;
+        }
 
         /// <summary>全項目の正規表現条件を保存前に検証する。</summary>
         public bool TryValidateSmartConditions(out ClipItem? invalidItem, out string error)
@@ -822,6 +954,13 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.ClipboardPattern):
                     OnPropertyChanged(nameof(Preview));
                     OnPropertyChanged(nameof(ClipboardConditionStatus));
+                    break;
+
+                // 形式が変わると、差し込んだ値のエスケープの有無が変わる。
+                // プレビューは「実際にコピーされる文字列」なので作り直す
+                case nameof(ClipItem.Format):
+                    OnPropertyChanged(nameof(Preview));
+                    OnPropertyChanged(nameof(ClipFormatStatus));
                     break;
 
                 case nameof(ClipItem.AppProcess):
