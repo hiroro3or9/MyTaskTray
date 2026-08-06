@@ -52,6 +52,12 @@ namespace MyTaskTray
         // メニューを出す前に前面化するためだけの窓。詳細は MenuHostWindow を参照
         private readonly MenuHostWindow _menuHost = new();
 
+        // クリップボード監視を伴う作業は同時に 1 つだけ実行する。
+        private readonly ActionSessionManager _actionSessions = new();
+
+        // 組み込みアクションを現在の状況に応じたメニュー領域へ振り分ける。
+        private readonly TrayMenuComposer _menuComposer;
+
         // 直近に前面だったアプリの実行ファイル名。設定画面の候補に出すためだけに使う。
         // メモリ上にだけ置き、設定ファイルにも履歴にも残さない
         private readonly List<string> _recentApps = [];
@@ -60,7 +66,6 @@ namespace MyTaskTray
         private SettingsWindow? _settingsWindow;
         private QuickAddWindow? _quickAddWindow;
         private GlobalHotKey? _menuHotKey;
-        private ClipboardCaptureSession? _captureSession;
         private Icon? _icon;
         private bool _disposed;
 
@@ -72,6 +77,7 @@ namespace MyTaskTray
         public TrayIconManager()
         {
             _settings = SettingsStore.Load();
+            _menuComposer = new TrayMenuComposer(CreateActionRegistry());
             _icon = LoadTrayIcon();
 
             _notifyIcon = new NotifyIcon
@@ -90,6 +96,116 @@ namespace MyTaskTray
 
             // Windows のテーマが変わったらメニューを作り直す
             ThemeManager.ThemeChanged += OnThemeChanged;
+        }
+
+        /// <summary>
+        /// 通常時に「作業ツール」または「この内容でできること」へ表示する
+        /// 組み込みアクションを登録する。
+        /// </summary>
+        private TrayActionRegistry CreateActionRegistry()
+        {
+            TrayActionRegistry registry = new();
+            registry.Register(new TrayActionDefinition(
+                Id: TrayActionIds.RemoveBlankLines,
+                Label: "空行を除外",
+                ToolTip: "空白だけの行を取り除き、残した行の改行コードを保ってコピーします",
+                Group: "text-transform",
+                GroupLabel: "テキスト加工",
+                GroupOrder: 200,
+                Order: 100,
+                AccessKey: 'B',
+                Kind: TrayActionKind.Contextual,
+                DefaultEnabled: true,
+                AllowDuringSession: false,
+                Evaluate: context => !string.IsNullOrWhiteSpace(context.Clipboard)
+                    && ClipboardTextActions.HasBlankLines(context.Clipboard)
+                        ? TrayActionAvailability.Enabled
+                        : TrayActionAvailability.Hidden,
+                Execute: context => CopyBuiltInActionResult(
+                    "空行を除外しました",
+                    ClipboardTextActions.RemoveBlankLines(context.Clipboard))));
+
+            registry.Register(new TrayActionDefinition(
+                Id: TrayActionIds.JsonMinify,
+                Label: "JSONをMinify",
+                ToolTip: "JSON の空白と改行を取り除き、1 行にしてコピーします",
+                Group: "json-transform",
+                GroupLabel: "データ変換",
+                GroupOrder: 300,
+                Order: 100,
+                AccessKey: 'M',
+                Kind: TrayActionKind.Contextual,
+                DefaultEnabled: true,
+                AllowDuringSession: false,
+                Evaluate: context => ClipboardTextActions.IsJsonObjectOrArray(context.Clipboard)
+                    ? TrayActionAvailability.Enabled
+                    : TrayActionAvailability.Hidden,
+                Execute: context => FormatJson(context.Clipboard, indented: false)));
+
+            registry.Register(new TrayActionDefinition(
+                Id: TrayActionIds.JsonFormat,
+                Label: "JSONを整形",
+                ToolTip: "JSON を 2 スペースのインデントと改行で整えてコピーします",
+                Group: "json-transform",
+                GroupLabel: "データ変換",
+                GroupOrder: 300,
+                Order: 200,
+                AccessKey: 'F',
+                Kind: TrayActionKind.Contextual,
+                DefaultEnabled: true,
+                AllowDuringSession: false,
+                Evaluate: context => ClipboardTextActions.IsJsonObjectOrArray(context.Clipboard)
+                    ? TrayActionAvailability.Enabled
+                    : TrayActionAvailability.Hidden,
+                Execute: context => FormatJson(context.Clipboard, indented: true)));
+
+            registry.Register(new TrayActionDefinition(
+                Id: TrayActionIds.SequentialCopyPaste,
+                Label: "連続コピー＆ペースト",
+                ToolTip: "A で Ctrl+C を繰り返し、B で Ctrl+V を押すたびに順番に貼り付けます",
+                Group: "continuous-work",
+                GroupLabel: "連続作業",
+                GroupOrder: 100,
+                Order: 100,
+                AccessKey: 'R',
+                Kind: TrayActionKind.Session,
+                DefaultEnabled: true,
+                AllowDuringSession: false,
+                Evaluate: _ => TrayActionAvailability.Enabled,
+                Execute: _ => StartSequentialCopyPaste()));
+
+            return registry;
+        }
+
+        private void FormatJson(string clipboard, bool indented)
+        {
+            if (!ClipboardTextActions.TryFormatJson(clipboard, indented, out string result))
+            {
+                ToastWindow.ShowToast(
+                    "JSONを変換できません",
+                    "クリップボードの内容を JSON のオブジェクトまたは配列として読み取れませんでした");
+                return;
+            }
+
+            CopyBuiltInActionResult(
+                indented ? "JSONを整形しました" : "JSONをMinifyしました",
+                result);
+        }
+
+        private void CopyBuiltInActionResult(string successTitle, string result)
+        {
+            if (!ClipboardService.TryCopy(result))
+            {
+                ToastWindow.ShowToast(
+                    "クリップボードを更新できません",
+                    "他のアプリがクリップボードを使用している可能性があります");
+                return;
+            }
+
+            if (_settings.ShowCopyNotification)
+            {
+                ToastWindow.ShowToast(successTitle, TemplateEngine.ToSingleLine(result, 120));
+            }
         }
 
         /// <summary>トレイアイコンを表示してメニューを構築する。</summary>
@@ -146,7 +262,9 @@ namespace MyTaskTray
         /// <summary>設定を読み直してメニューを作り直す。</summary>
         public void ReloadSettings()
         {
-            CancelCapture(showToast: false, rebuildMenu: false);
+            // 連続コピーは設定と独立しているので続行できる。
+            // 複数入力は選択した ClipItem を保持しているため、設定全体を差し替える前に明示的に終了する。
+            CancelCapture(showToast: true, rebuildMenu: false);
             _settings = SettingsStore.Load();
             RebuildMenu();
             RegisterMenuHotKey();
@@ -484,20 +602,16 @@ namespace MyTaskTray
 
             Func<string> clipboard = CreateClipboardReader();
 
-            if (_captureSession is not null)
-            {
-                ClipboardCaptureProgress progress = _captureSession.Progress;
-                menu.Items.Add(new ToolStripMenuItem(
-                    $"入力待ち: {progress.CurrentName} ({progress.CapturedCount + 1}/{progress.TotalCount})")
-                {
-                    Enabled = false,
-                });
+            AddActiveSessionItems(menu.Items);
 
-                ToolStripMenuItem cancelCapture = new("複数入力をキャンセル(&C)");
-                cancelCapture.Click += (_, _) => CancelCapture(showToast: true, rebuildMenu: true);
-                menu.Items.Add(cancelCapture);
-                menu.Items.Add(new ToolStripSeparator());
-            }
+            TrayActionContext actionContext = new(
+                clipboard,
+                _menuContext,
+                _actionSessions,
+                (id, defaultEnabled) => _settings.IsActionVisible(id, defaultEnabled));
+            TrayMenuComposition actionMenu = _menuComposer.Compose(actionContext);
+            IReadOnlyList<(TrayActionDefinition Action, TrayActionAvailability Availability)> contextualActions
+                = actionMenu.ContextualActions;
 
             List<MenuEntry> regular = [];
             List<MenuEntry> smart = [];
@@ -526,7 +640,7 @@ namespace MyTaskTray
                 }
             }
 
-            if (smart.Count > 0)
+            if (smart.Count > 0 || contextualActions.Count > 0)
             {
                 ToolStripMenuItem smartParent = new("この内容でできること")
                 {
@@ -537,13 +651,49 @@ namespace MyTaskTray
                     smartDropDown.ShowImageMargin = false;
                 }
 
-                BuildClipItems(smartParent.DropDownItems, smart, clipboard);
+                if (smart.Count > 0)
+                {
+                    BuildClipItems(
+                        smartParent.DropDownItems,
+                        smart,
+                        clipboard,
+                        enabled: !_actionSessions.HasActiveSession);
+                }
+
+                if (contextualActions.Count > 0)
+                {
+                    if (smartParent.DropDownItems.Count > 0)
+                    {
+                        smartParent.DropDownItems.Add(new ToolStripSeparator());
+                    }
+
+                    AddBuiltInActionItems(
+                        smartParent.DropDownItems,
+                        contextualActions,
+                        actionContext);
+                }
+
                 TrimEdgeSeparators(smartParent.DropDownItems);
+                smartParent.Enabled = smartParent.DropDownItems
+                    .OfType<ToolStripMenuItem>()
+                    .Any(item => item.Enabled);
+                if (!smartParent.Enabled)
+                {
+                    smartParent.ToolTipText = _actionSessions.HasActiveSession
+                        ? BuildActiveSessionBlockedReason()
+                        : contextualActions
+                            .Select(entry => entry.Availability.DisabledReason)
+                            .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason))
+                            ?? "現在の内容では使用できません";
+                }
                 menu.Items.Add(smartParent);
                 menu.Items.Add(new ToolStripSeparator());
             }
 
-            if (regular.Count == 0 && smart.Count == 0 && _settings.Items.Count > 0)
+            if (regular.Count == 0
+                && smart.Count == 0
+                && contextualActions.Count == 0
+                && _settings.Items.Count > 0)
             {
                 // 何も出ない理由が「クリップボードの内容」なのか「前面のアプリ」なのかで、
                 // 次にやることが変わる。取り違えないよう文言を分ける
@@ -557,10 +707,17 @@ namespace MyTaskTray
                 });
             }
 
-            BuildClipItems(menu.Items, regular, clipboard);
+            BuildClipItems(
+                menu.Items,
+                regular,
+                clipboard,
+                enabled: !_actionSessions.HasActiveSession);
 
             // 先頭・末尾・連続した区切り線を取り除く。
             // キャプチャ欄やスマートアクションとの境界は残したいため、通常項目を足したあとに整理する。
+            TrimEdgeSeparators(menu.Items);
+
+            AddWorkToolsMenu(menu.Items, actionMenu.WorkTools, actionContext);
             TrimEdgeSeparators(menu.Items);
 
             if (menu.Items.Count > 0)
@@ -585,6 +742,365 @@ namespace MyTaskTray
 
             // 動的に追加したサブメニューにも現在の配色を適用する。
             TrayMenuTheme.Apply(menu);
+        }
+
+        /// <summary>登録済みの組み込みアクションを「作業ツール」サブメニューへ追加する。</summary>
+        private void AddWorkToolsMenu(
+            ToolStripItemCollection items,
+            IReadOnlyList<(TrayActionDefinition Action, TrayActionAvailability Availability)> actions,
+            TrayActionContext context)
+        {
+            if (actions.Count == 0)
+            {
+                return;
+            }
+
+            ToolStripMenuItem parent = new("作業ツール(&T)")
+            {
+                ToolTipText = "一時的な作業やクリップボード加工を開始します",
+            };
+            if (parent.DropDown is ToolStripDropDownMenu dropDown)
+            {
+                dropDown.ShowImageMargin = false;
+            }
+
+            AddBuiltInActionItems(parent.DropDownItems, actions, context);
+
+            TrimEdgeSeparators(parent.DropDownItems);
+            if (parent.DropDownItems.Count == 0)
+            {
+                parent.Dispose();
+                return;
+            }
+
+            if (items.Count > 0 && items[items.Count - 1] is not ToolStripSeparator)
+            {
+                items.Add(new ToolStripSeparator());
+            }
+
+            items.Add(parent);
+        }
+
+        /// <summary>同じグループのまとまりを保ちながら、アクション項目を追加する。</summary>
+        private static void AddBuiltInActionItems(
+            ToolStripItemCollection items,
+            IReadOnlyList<(TrayActionDefinition Action, TrayActionAvailability Availability)> actions,
+            TrayActionContext context)
+        {
+            string? previousGroup = null;
+            foreach ((TrayActionDefinition action, TrayActionAvailability availability) in actions)
+            {
+                if (previousGroup is not null
+                    && !string.Equals(previousGroup, action.Group, StringComparison.Ordinal))
+                {
+                    items.Add(new ToolStripSeparator());
+                }
+
+                string text = $"{EscapeAmpersand(action.Label)}(&{char.ToUpperInvariant(action.AccessKey)})";
+                ToolStripMenuItem actionItem = new(text)
+                {
+                    Enabled = availability.IsEnabled,
+                    ToolTipText = availability.IsEnabled
+                        ? action.ToolTip
+                        : availability.DisabledReason,
+                    Tag = action.Id,
+                };
+                actionItem.Click += (_, _) => ExecuteTrayAction(action, context);
+                items.Add(actionItem);
+                previousGroup = action.Group;
+            }
+        }
+
+        private static void ExecuteTrayAction(TrayActionDefinition action, TrayActionContext context)
+        {
+            try
+            {
+                // メニューを開いたまま別経路で状態が変わることがあるため、クリック時にも再確認する。
+                if (!context.IsActionVisible(action))
+                {
+                    ToastWindow.ShowToast(
+                        "作業ツールを実行できません",
+                        "設定でメニューに表示しない状態になっています");
+                    return;
+                }
+
+                TrayActionAvailability availability = action.Evaluate(context);
+                if (!availability.IsVisible || !availability.IsEnabled)
+                {
+                    ToastWindow.ShowToast(
+                        "作業ツールを実行できません",
+                        string.IsNullOrWhiteSpace(availability.DisabledReason)
+                            ? "現在の状態では使用できません"
+                            : availability.DisabledReason);
+                    return;
+                }
+
+                if (context.Sessions.HasActiveSession && !action.AllowDuringSession)
+                {
+                    string running = context.Sessions.CurrentDisplayName ?? "別の作業モード";
+                    ToastWindow.ShowToast(
+                        "作業ツールを実行できません",
+                        $"「{running}」を実行中のため使用できません");
+                    return;
+                }
+
+                action.Execute(context);
+            }
+            catch (Exception)
+            {
+                ToastWindow.ShowToast(
+                    "作業ツールを実行できません",
+                    $"「{action.Label}」の実行中にエラーが発生しました");
+            }
+        }
+
+        private string BuildActiveSessionBlockedReason()
+            => string.IsNullOrWhiteSpace(_actionSessions.CurrentDisplayName)
+                ? "別の作業モードを実行中のため使用できません"
+                : $"「{_actionSessions.CurrentDisplayName}」を実行中のため使用できません";
+
+        /// <summary>実行中の作業モードだけをメニュー先頭へ昇格して表示する。</summary>
+        private void AddActiveSessionItems(ToolStripItemCollection items)
+        {
+            SequentialCopyPasteSession? sequential = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            if (sequential is not null)
+            {
+                if (sequential.Phase == SequentialCopyPastePhase.Capturing)
+                {
+                    items.Add(new ToolStripMenuItem(
+                        $"連続コピー: {sequential.CapturedCount} 件を収集中")
+                    {
+                        Enabled = false,
+                        ToolTipText = "A でデータを順番にコピーしてください。B で最初の Ctrl+V を押すと収集を終えます",
+                    });
+
+                    ToolStripMenuItem beginPasting = new("収集を終えて貼り付けへ(&P)")
+                    {
+                        Enabled = sequential.CapturedCount > 0,
+                        ToolTipText = "収集を終了します。次の Ctrl+V で 1 件目を貼り付けます",
+                    };
+                    beginPasting.Click += (_, _) => BeginSequentialPasting();
+                    items.Add(beginPasting);
+
+                    ToolStripMenuItem undo = new("最後のコピーを取り消す(&U)")
+                    {
+                        Enabled = sequential.CapturedCount > 0,
+                    };
+                    undo.Click += (_, _) => UndoSequentialCapture();
+                    items.Add(undo);
+                }
+                else
+                {
+                    items.Add(new ToolStripMenuItem(
+                        $"連続貼り付け: 次は {sequential.PastedCount + 1}/{sequential.CapturedCount}")
+                    {
+                        Enabled = false,
+                        ToolTipText = "B で Ctrl+V を押すたびに次のデータを貼り付けます",
+                    });
+                }
+
+                ToolStripMenuItem cancelSequential = new("連続コピー＆ペーストをキャンセル(&C)");
+                cancelSequential.Click += (_, _) => CancelSequentialCopyPaste(
+                    showToast: true,
+                    rebuildMenu: true);
+                items.Add(cancelSequential);
+                items.Add(new ToolStripSeparator());
+                return;
+            }
+
+            ClipboardCaptureSession? capture = _actionSessions.Get<ClipboardCaptureSession>(
+                TrayActionIds.MultipleInput);
+            if (capture is null)
+            {
+                return;
+            }
+
+            ClipboardCaptureProgress progress = capture.Progress;
+            items.Add(new ToolStripMenuItem(
+                $"入力待ち: {progress.CurrentName} ({progress.CapturedCount + 1}/{progress.TotalCount})")
+            {
+                Enabled = false,
+            });
+
+            ToolStripMenuItem cancelCapture = new("複数入力をキャンセル(&C)");
+            cancelCapture.Click += (_, _) => CancelCapture(showToast: true, rebuildMenu: true);
+            items.Add(cancelCapture);
+            items.Add(new ToolStripSeparator());
+        }
+
+        private void StartSequentialCopyPaste()
+        {
+            if (_actionSessions.HasActiveSession)
+            {
+                ToastWindow.ShowToast("作業ツールを開始できません", BuildActiveSessionBlockedReason());
+                return;
+            }
+
+            SequentialCopyPasteSession? session = null;
+            try
+            {
+                session = new SequentialCopyPasteSession(
+                    captured: (value, count) =>
+                    {
+                        if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
+                        {
+                            return;
+                        }
+
+                        RebuildMenu();
+                        if (_settings.ShowCopyNotification)
+                        {
+                            ToastWindow.ShowToast(
+                                $"連続コピー: {count} 件目を追加しました",
+                                TemplateEngine.ToSingleLine(value, 100));
+                        }
+                    },
+                    captureRejected: () =>
+                    {
+                        if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
+                        {
+                            return;
+                        }
+
+                        ToastWindow.ShowToast(
+                            "連続コピーに追加できません",
+                            "文字列をコピーしてください。空またはテキスト以外の内容は追加されません");
+                    },
+                    pasted: progress =>
+                    {
+                        if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
+                        {
+                            return;
+                        }
+
+                        if (progress.RemainingCount > 0)
+                        {
+                            RebuildMenu();
+                            ToastWindow.ShowToast(
+                                $"連続貼り付け: {progress.PastedCount}/{progress.TotalCount}",
+                                $"残り {progress.RemainingCount} 件です");
+                        }
+                    },
+                    pasteFailed: () =>
+                    {
+                        if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
+                        {
+                            return;
+                        }
+
+                        ToastWindow.ShowToast(
+                            "今回の貼り付けを止めました",
+                            "クリップボードを更新できませんでした。もう一度 Ctrl+V を押してください");
+                    },
+                    completed: () =>
+                    {
+                        if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
+                        {
+                            return;
+                        }
+
+                        int total = session?.CapturedCount ?? 0;
+                        _actionSessions.Complete(TrayActionIds.SequentialCopyPaste, session);
+                        RebuildMenu();
+                        ToastWindow.ShowToast(
+                            "連続貼り付けが完了しました",
+                            $"{total} 件を順番に貼り付けました");
+                    },
+                    timedOut: () =>
+                    {
+                        if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
+                        {
+                            return;
+                        }
+
+                        _actionSessions.Complete(TrayActionIds.SequentialCopyPaste, session);
+                        RebuildMenu();
+                        ToastWindow.ShowToast(
+                            "連続コピー＆ペーストを終了しました",
+                            "10 分間コピーまたは貼り付けがなかったため、自動的にキャンセルしました");
+                    });
+
+                if (!_actionSessions.TryStart(
+                    TrayActionIds.SequentialCopyPaste,
+                    "連続コピー＆ペースト",
+                    session))
+                {
+                    session.Dispose();
+                    ToastWindow.ShowToast("作業ツールを開始できません", BuildActiveSessionBlockedReason());
+                    return;
+                }
+
+                if (!session.Start())
+                {
+                    _actionSessions.Complete(TrayActionIds.SequentialCopyPaste, session);
+                    ToastWindow.ShowToast(
+                        "連続コピー＆ペーストを開始できません",
+                        "Windows のクリップボードまたはキー入力を監視できませんでした");
+                    return;
+                }
+            }
+            catch (Exception)
+            {
+                _actionSessions.Complete(TrayActionIds.SequentialCopyPaste, session);
+                session?.Dispose();
+                ToastWindow.ShowToast(
+                    "連続コピー＆ペーストを開始できません",
+                    "Windows のクリップボードまたはキー入力を監視できませんでした");
+                return;
+            }
+
+            RebuildMenu();
+            ToastWindow.ShowToast(
+                "連続コピーを開始しました",
+                "A でデータを順番に Ctrl+C し、B で Ctrl+V を繰り返してください");
+        }
+
+        private void BeginSequentialPasting()
+        {
+            SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            if (session is null || !session.TryBeginPasting())
+            {
+                return;
+            }
+
+            RebuildMenu();
+            ToastWindow.ShowToast(
+                "連続貼り付けの準備ができました",
+                $"Ctrl+V を押すたびに、{session.CapturedCount} 件を順番に貼り付けます");
+        }
+
+        private void UndoSequentialCapture()
+        {
+            SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            if (session is null || !session.TryUndoLastCapture(out string removed))
+            {
+                return;
+            }
+
+            RebuildMenu();
+            ToastWindow.ShowToast(
+                "最後のコピーを取り消しました",
+                TemplateEngine.ToSingleLine(removed, 100));
+        }
+
+        private void CancelSequentialCopyPaste(bool showToast, bool rebuildMenu)
+        {
+            SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            bool canceled = _actionSessions.Cancel(TrayActionIds.SequentialCopyPaste, session);
+
+            if (rebuildMenu && !_disposed)
+            {
+                RebuildMenu();
+            }
+
+            if (showToast && canceled)
+            {
+                ToastWindow.ShowToast("連続コピー＆ペーストをキャンセルしました", string.Empty);
+            }
         }
 
         /// <summary>
@@ -626,6 +1142,23 @@ namespace MyTaskTray
         /// <summary>トレイアイコンにマウスを乗せたときの説明。</summary>
         private string BuildIconToolTip()
         {
+            SequentialCopyPasteSession? sequential = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            if (sequential is not null)
+            {
+                return sequential.Phase == SequentialCopyPastePhase.Capturing
+                    ? $"{ToolTipText}（連続コピー: {sequential.CapturedCount} 件）"
+                    : $"{ToolTipText}（連続貼り付け: 残り {sequential.RemainingCount} 件）";
+            }
+
+            ClipboardCaptureSession? capture = _actionSessions.Get<ClipboardCaptureSession>(
+                TrayActionIds.MultipleInput);
+            if (capture is not null)
+            {
+                ClipboardCaptureProgress progress = capture.Progress;
+                return $"{ToolTipText}（複数入力: {progress.CapturedCount + 1}/{progress.TotalCount}）";
+            }
+
             if (_settings.IsFallback)
             {
                 return ToolTipText + "（設定を読み込めませんでした）";
@@ -644,7 +1177,8 @@ namespace MyTaskTray
         private void BuildClipItems(
             ToolStripItemCollection target,
             IEnumerable<MenuEntry> entries,
-            Func<string> clipboard)
+            Func<string> clipboard,
+            bool enabled)
         {
             List<MenuEntry> source = [.. entries];
             if (source.Count == 0)
@@ -676,7 +1210,7 @@ namespace MyTaskTray
                 ClipItem item = menuEntry.Item;
                 ToolStripItem entry = item.IsSeparator
                     ? new ToolStripSeparator()
-                    : CreateClipMenuItem(item, clipboard, menuEntry.Captures);
+                    : CreateClipMenuItem(item, clipboard, menuEntry.Captures, enabled);
 
                 // 「日付」と「日付 」（末尾に空白）が別のサブメニューになってしまわないよう、
                 // 見た目で区別できない前後の空白は無視して同じカテゴリとして扱う
@@ -695,7 +1229,11 @@ namespace MyTaskTray
 
                 if (!categories.TryGetValue(category, out ToolStripMenuItem? parent))
                 {
-                    parent = new ToolStripMenuItem(EscapeAmpersand(category));
+                    parent = new ToolStripMenuItem(EscapeAmpersand(category))
+                    {
+                        Enabled = enabled,
+                        ToolTipText = enabled ? string.Empty : BuildActiveSessionBlockedReason(),
+                    };
 
                     // ShowImageMargin は ToolStripDropDownMenu 側のプロパティ
                     if (parent.DropDown is ToolStripDropDownMenu dropDownMenu)
@@ -851,7 +1389,8 @@ namespace MyTaskTray
         private ToolStripMenuItem CreateClipMenuItem(
             ClipItem item,
             Func<string> clipboard,
-            IReadOnlyDictionary<string, string> captures)
+            IReadOnlyDictionary<string, string> captures,
+            bool enabled)
         {
             string label = string.IsNullOrWhiteSpace(item.Name) ? item.Text : item.Name;
 
@@ -863,7 +1402,10 @@ namespace MyTaskTray
 
             ToolStripMenuItem menuItem = new(EscapeAmpersand(Truncate(label, MenuTextMaxLength)))
             {
-                ToolTipText = BuildToolTip(item, clipboard, _settings.Sprint, captures),
+                Enabled = enabled,
+                ToolTipText = enabled
+                    ? BuildToolTip(item, clipboard, _settings.Sprint, captures)
+                    : BuildActiveSessionBlockedReason(),
                 Tag = item,
             };
             menuItem.Click += (_, _) => ActivateClipItem(item, clipboard, captures);
@@ -903,6 +1445,14 @@ namespace MyTaskTray
             Func<string> clipboard,
             IReadOnlyDictionary<string, string> captures)
         {
+            // メニューを開いたあとに別経路でセッションが始まった場合も、
+            // 実行中のデータを暗黙に破棄したり、収集内容へ定型文を混ぜたりしない。
+            if (_actionSessions.HasActiveSession)
+            {
+                ToastWindow.ShowToast("コピー項目を使用できません", BuildActiveSessionBlockedReason());
+                return;
+            }
+
             IReadOnlyList<InputCaptureDefinition> inputs = TemplateEngine.GetInputDefinitions(item.Text);
             if (inputs.Count == 0)
             {
@@ -921,7 +1471,11 @@ namespace MyTaskTray
             string sourceClipboard,
             IReadOnlyDictionary<string, string> captures)
         {
-            CancelCapture(showToast: false, rebuildMenu: false);
+            if (_actionSessions.HasActiveSession)
+            {
+                ToastWindow.ShowToast("複数入力を開始できません", BuildActiveSessionBlockedReason());
+                return;
+            }
 
             foreach (InputCaptureDefinition input in inputs)
             {
@@ -942,7 +1496,7 @@ namespace MyTaskTray
                 inputs,
                 progressed: progress =>
                 {
-                    if (!ReferenceEquals(_captureSession, session))
+                    if (!_actionSessions.IsCurrent(TrayActionIds.MultipleInput, session))
                     {
                         return;
                     }
@@ -952,23 +1506,23 @@ namespace MyTaskTray
                 },
                 completed: inputs =>
                 {
-                    if (!ReferenceEquals(_captureSession, session))
+                    if (!_actionSessions.IsCurrent(TrayActionIds.MultipleInput, session))
                     {
                         return;
                     }
 
-                    _captureSession = null;
+                    _actionSessions.Complete(TrayActionIds.MultipleInput, session);
                     CopyToClipboard(item, () => sourceClipboard, inputs, captures);
                     RebuildMenu();
                 },
                 timedOut: () =>
                 {
-                    if (!ReferenceEquals(_captureSession, session))
+                    if (!_actionSessions.IsCurrent(TrayActionIds.MultipleInput, session))
                     {
                         return;
                     }
 
-                    _captureSession = null;
+                    _actionSessions.Complete(TrayActionIds.MultipleInput, session);
                     RebuildMenu();
                     ToastWindow.ShowToast("複数入力をキャンセルしました", "2 分間コピーがなかったため終了しました");
                 },
@@ -981,10 +1535,19 @@ namespace MyTaskTray
                     ToastWindow.ShowToast($"入力: {rejection.Progress.CurrentName}", message);
                 });
 
-            _captureSession = session;
+            if (!_actionSessions.TryStart(
+                TrayActionIds.MultipleInput,
+                "複数入力",
+                session))
+            {
+                session.Dispose();
+                ToastWindow.ShowToast("複数入力を開始できません", BuildActiveSessionBlockedReason());
+                return;
+            }
+
             if (!session.Start())
             {
-                _captureSession = null;
+                _actionSessions.Complete(TrayActionIds.MultipleInput, session);
                 ToastWindow.ShowToast(
                     "複数入力を開始できません",
                     "Windows のクリップボード変更通知を受け取れませんでした");
@@ -1011,16 +1574,16 @@ namespace MyTaskTray
 
         private void CancelCapture(bool showToast, bool rebuildMenu)
         {
-            ClipboardCaptureSession? session = _captureSession;
-            _captureSession = null;
-            session?.Dispose();
+            ClipboardCaptureSession? session = _actionSessions.Get<ClipboardCaptureSession>(
+                TrayActionIds.MultipleInput);
+            bool canceled = _actionSessions.Cancel(TrayActionIds.MultipleInput, session);
 
             if (rebuildMenu && !_disposed)
             {
                 RebuildMenu();
             }
 
-            if (showToast && session is not null)
+            if (showToast && canceled)
             {
                 ToastWindow.ShowToast("複数入力をキャンセルしました", string.Empty);
             }
@@ -1068,9 +1631,14 @@ namespace MyTaskTray
                 () => clipboard,
                 _settings.Sprint,
                 inputs,
-                captures);
+                captures,
 
-            if (!ClipboardService.TryCopy(value))
+                // HTML の項目では、差し込まれた値だけをエスケープする。
+                // 利用者が書いたタグは生かしたまま、{input:…} に入った & や < が
+                // 壊れた HTML にならないようにするため
+                ClipboardService.GetValueTransform(item.Format));
+
+            if (!ClipboardService.TryCopy(value, item.Format))
             {
                 System.Windows.MessageBox.Show(
                     "クリップボードにコピーできませんでした。他のアプリがクリップボードを使用している可能性があります。",
@@ -1090,6 +1658,14 @@ namespace MyTaskTray
                 else
                 {
                     string label = string.IsNullOrWhiteSpace(item.Name) ? "コピーしました" : item.Name;
+
+                    // プレーンテキスト以外で載せた場合は、その旨も伝える。
+                    // 貼り付け先によって結果が変わるので、何で載せたかが分かるほうがよい
+                    if (item.HasFormat)
+                    {
+                        label += $" ({item.FormatLabel})";
+                    }
+
                     ToastWindow.ShowToast(label, TemplateEngine.ToSingleLine(value, 120));
                 }
             }
@@ -1313,7 +1889,10 @@ namespace MyTaskTray
                 return;
             }
 
-            _settingsWindow = new SettingsWindow(_settings.Clone(), _recentApps);
+            _settingsWindow = new SettingsWindow(
+                _settings.Clone(),
+                _recentApps,
+                _menuComposer.Definitions);
             _settingsWindow.Closed += (_, _) =>
             {
                 bool saved = _settingsWindow?.Saved == true;
@@ -1503,7 +2082,7 @@ namespace MyTaskTray
 
             _disposed = true;
             ThemeManager.ThemeChanged -= OnThemeChanged;
-            CancelCapture(showToast: false, rebuildMenu: false);
+            _actionSessions.Dispose();
             _menuHotKey?.Dispose();
             _menuHotKey = null;
             _notifyIcon.MouseUp -= OnIconMouseUp;

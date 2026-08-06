@@ -33,6 +33,11 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="4,1,0,0">
+                        <Border Style="{StaticResource Badge}"
+                                ToolTip="書式付きでコピーします"
+                                Visibility="{Binding HasFormat, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding FormatLabel}" Style="{StaticResource BadgeText}" />
+                        </Border>
                         <Border Style="{StaticResource SeqBadge}"
                                 Visibility="{Binding UsesSequence, Converter={StaticResource BoolToVis}}">
                             <TextBlock Text="連番" Style="{StaticResource SeqBadgeText}" />
@@ -279,11 +284,31 @@
                         </StackPanel>
 
                         <Grid Grid.Row="4" Margin="0,0,0,4">
-                            <TextBlock Text="クリップボードにコピーする文字列" VerticalAlignment="Center"
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Text="クリップボードにコピーする文字列"
+                                       VerticalAlignment="Center"
                                        Style="{StaticResource FieldLabel}" Margin="0" />
-                            <Button x:Name="InsertButton" Content="差し込みを挿入 ▾" HorizontalAlignment="Right"
-                                    Padding="10,3" MinHeight="26" Click="OnOpenInsertPopup"
-                                    ToolTip="{}{date} などの差し込みをカーソル位置に挿入します" />
+
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock Text="形式" VerticalAlignment="Center" Margin="0,0,6,0"
+                                           Foreground="{DynamicResource Brush.Text.Secondary}" />
+                                <ComboBox x:Name="FormatBox" Width="120" VerticalAlignment="Center"
+                                          ItemsSource="{Binding ClipFormatOptions}"
+                                          DisplayMemberPath="Name" SelectedValuePath="Format"
+                                          SelectedValue="{Binding SelectedItem.Format, Mode=TwoWay}"
+                                          ToolTip="貼り付け先によって、この形式に応じた見え方になります" />
+                                <Button x:Name="InsertButton" Content="差し込みを挿入 ▾" Margin="8,0,0,0"
+                                        Padding="10,3" MinHeight="26" Click="OnOpenInsertPopup"
+                                        ToolTip="{}{date} などの差し込みをカーソル位置に挿入します" />
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="1" Margin="0,5,0,0" TextWrapping="Wrap" FontSize="11"
+                                       Foreground="{DynamicResource Brush.Text.Secondary}"
+                                       Text="{Binding ClipFormatStatus}" />
                         </Grid>
 
                         <TextBox Grid.Row="5" x:Name="TextBox_Content"
@@ -347,19 +372,27 @@
 
         <!-- フッター -->
         <Grid Grid.Row="2" Margin="18,14,18,16">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <WrapPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
                 <CheckBox Content="コピーしたときに通知を表示する" VerticalAlignment="Center"
                           IsChecked="{Binding ShowCopyNotification}" />
                 <Button x:Name="HotKeyButton" Content="ホットキーの設定" Margin="16,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenHotKeySettings"
                         ToolTip="トレイメニューを表示するグローバルホットキーを設定します" />
+                <Button x:Name="ActionSettingsButton" Content="作業ツールの表示" Margin="8,0,0,0"
+                        Style="{StaticResource SubtleButton}" Click="OnOpenActionSettings"
+                        IsEnabled="{Binding HasActionSettings}"
+                        ToolTip="組み込みアクションをメニューに表示するか選びます" />
                 <Button x:Name="SprintButton" Content="スプリントの設定" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenSprintSettings"
                         ToolTip="{}{date@sprint} などが参照する基準日と長さを決めます" />
                 <Button x:Name="FolderButton" Content="設定フォルダーを開く" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenFolder" />
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            </WrapPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="キャンセル" Width="104" Click="OnCancel" IsCancel="True" />
                 <Button Content="保存して閉じる" Width="132" Margin="8,0,0,0"
                         Style="{StaticResource AccentButton}" Click="OnSave" IsDefault="True" />
@@ -388,6 +421,46 @@
                              ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換 を指定できます" />
                     <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
                                Text="{Binding MenuHotKeyStatus}" />
+                </StackPanel>
+            </Border>
+        </Popup>
+
+        <!-- 組み込み作業ツールの表示設定 -->
+        <Popup x:Name="ActionSettingsPopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"
+               Placement="Top" PlacementTarget="{Binding ElementName=ActionSettingsButton}"
+               VerticalOffset="-4" HorizontalOffset="-10"
+               PreviewKeyDown="OnPopupPreviewKeyDown">
+            <Border Style="{StaticResource PopupCard}" Width="470" Margin="10">
+                <StackPanel Margin="14">
+                    <TextBlock Text="作業ツールの表示" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="チェックした機能を「作業ツール」や「この内容でできること」に表示します。実行中の作業は、完了またはキャンセルまで先頭に表示されます。" />
+
+                    <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding ActionSettings}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding IsVisible}" Margin="2,5"
+                                              HorizontalContentAlignment="Stretch">
+                                        <Grid Width="400">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding Description}" Margin="0,2,0,0"
+                                                           Style="{StaticResource Hint}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding Group}"
+                                                       VerticalAlignment="Top" Margin="6,1,0,0"
+                                                       Foreground="{DynamicResource Brush.Text.Secondary}" />
+                                        </Grid>
+                                    </CheckBox>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
                 </StackPanel>
             </Border>
         </Popup>

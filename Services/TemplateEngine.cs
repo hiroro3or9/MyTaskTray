@@ -62,6 +62,9 @@ namespace MyTaskTray.Services
     ///   例) {calc:(1000+200)*1.1}  {calc:1000*8%|#,##0}  {calc:{seq}*100}
     /// クリップボード: <c>{clip[:書式]}</c>
     ///   例) {clip}  {clip:digits}  {clip:/ID-(\d+)/}
+    /// 文字列置換: <c>{replace:元の値|検索文字|置換文字}</c>
+    /// 正規表現置換: <c>{regexreplace:元の値|パターン|置換文字}</c>
+    ///   例) {replace:{clip}| |-}  {regexreplace:{input:名前}|\s+|-}
     /// <c>{{</c> と <c>}}</c> はそれぞれ <c>{</c> <c>}</c> のエスケープ。
     /// 解釈できない差し込み（未知の名前・基準・単位・書式、オフセットを付けられない差し込みなど）は、
     /// 書いたままの文字列を残してユーザーが誤りに気付けるようにする。
@@ -127,6 +130,8 @@ namespace MyTaskTray.Services
             new("{input:名前}", "複数入力", "項目を選んだあと、名前ごとにコピーした値を順番に差し込む"),
             new("{input:Issue URL:/issues/(\\d+)/}", "複数入力", "正規表現に一致する入力だけを受け取り、かっこの中身を差し込む"),
             new("{match:名前}", "スマートアクション", "正規表現などの表示条件で取り出した値を差し込む"),
+            new("{replace:{clip}|検索|置換}", "文字列変換", "差し込み結果に含まれる文字列をすべて置き換える"),
+            new("{regexreplace:{clip}|\\s+|-}", "文字列変換", "正規表現に一致する箇所をすべて置き換える"),
             new("{date@clip:yyyyMMdd}", "クリップボードの日付",
                 "コピーしてある日付を別の書式にする（2026/08/15 → 20260815）"),
             new("{date@clip:yyyy年M月d日}", "クリップボードの日付", "和文の日付にする"),
@@ -214,6 +219,13 @@ namespace MyTaskTray.Services
             public IReadOnlyDictionary<string, string>? Inputs { get; } = inputs;
 
             public IReadOnlyDictionary<string, string>? Matches { get; } = matches;
+
+            /// <summary>
+            /// 差し込んだ値に対する後処理。テンプレート本体には適用しない。
+            /// HTML として組み立てる項目で、値に含まれる &lt; や &amp; を
+            /// タグとして解釈させないために使う。
+            /// </summary>
+            public Func<string, string>? ValueTransform { get; init; }
         }
 
         /// <summary>差し込みを展開した文字列を返す。</summary>
@@ -253,9 +265,31 @@ namespace MyTaskTray.Services
             SprintSchedule? sprint,
             IReadOnlyDictionary<string, string>? inputs,
             IReadOnlyDictionary<string, string>? matches)
+            => Expand(template, now, sequenceValue, clipboard, sprint, inputs, matches, null);
+
+        /// <summary>
+        /// 差し込みを展開する。
+        /// </summary>
+        /// <param name="valueTransform">
+        /// 差し込んだ値だけに適用する後処理。テンプレート本体には適用しない。
+        /// HTML として組み立てる項目で、値に含まれる記号をエスケープするために使う。
+        /// null なら何もしない（従来どおり）。
+        /// </param>
+        public static string Expand(
+            string template,
+            DateTime now,
+            int sequenceValue,
+            Func<string>? clipboard,
+            SprintSchedule? sprint,
+            IReadOnlyDictionary<string, string>? inputs,
+            IReadOnlyDictionary<string, string>? matches,
+            Func<string, string>? valueTransform)
             => Expand(
                 template,
-                new ExpandContext(now, sequenceValue, clipboard, sprint, inputs, matches),
+                new ExpandContext(now, sequenceValue, clipboard, sprint, inputs, matches)
+                {
+                    ValueTransform = valueTransform,
+                },
                 0,
                 false);
 
@@ -326,6 +360,19 @@ namespace MyTaskTray.Services
                         && !inputPatterns.Contains(pattern, StringComparer.Ordinal))
                     {
                         inputPatterns.Add(pattern);
+                    }
+                }
+                else if (TryGetTextTransformBody(inner, out _, out string transformBody))
+                {
+                    // 検索文字と置換文字はリテラルとして扱う。
+                    // 入れ子として展開する「元の値」だけから入力を収集する。
+                    if (TrySplitTextTransformArguments(
+                        transformBody,
+                        out string source,
+                        out _,
+                        out _))
+                    {
+                        CollectInputDefinitions(source, names, patterns, depth + 1);
                     }
                 }
                 else
@@ -459,6 +506,18 @@ namespace MyTaskTray.Services
                     if (numericOnly && !LooksLikeNumber(expanded))
                     {
                         throw new FormatException($"{token} は数値にならないため式の中では使えません。");
+                    }
+
+                    // 差し込んだ値だけに後処理をかける。テンプレート本体（sb へ直接
+                    // 積んでいる文字）には触らない。HTML の項目で、利用者が書いたタグは
+                    // 生かしたまま、差し込まれた値だけをエスケープするための分岐。
+                    //
+                    // depth が 0 のときだけ通す。入れ子の展開でも通すと、
+                    // 内側で一度エスケープしたものを外側でもう一度エスケープしてしまう。
+                    // 式の中（numericOnly）も通さない。数値が実体参照になると計算できない
+                    if (depth == 0 && !numericOnly && context.ValueTransform is { } transform)
+                    {
+                        expanded = transform(expanded);
                     }
 
                     sb.Append(expanded);
@@ -625,8 +684,25 @@ namespace MyTaskTray.Services
 
                 string inner = template[(i + 1)..close];
 
-                // {seq} 自身か、{calc:{seq}*100} のように式の中で使われている場合
-                if (IsToken(inner, matches) || ContainsToken(inner, matches, depth + 1))
+                bool contains;
+                if (TryGetTextTransformBody(inner, out _, out string transformBody))
+                {
+                    // replace の検索文字・置換文字は展開しないので、元の値だけを調べる。
+                    contains = TrySplitTextTransformArguments(
+                        transformBody,
+                        out string source,
+                        out _,
+                        out _)
+                        && ContainsToken(source, matches, depth + 1);
+                }
+                else
+                {
+                    // {seq} 自身か、{calc:{seq}*100} のように式の中で使われている場合
+                    contains = IsToken(inner, matches)
+                        || ContainsToken(inner, matches, depth + 1);
+                }
+
+                if (contains)
                 {
                     return true;
                 }
@@ -661,6 +737,13 @@ namespace MyTaskTray.Services
 
         private static string ExpandToken(string inner, string original, ExpandContext context, int depth)
         {
+            // 置換後の文字列には半角スペースだけを指定することもあるため、
+            // 従来トークン用の Trim() より先に振り分け、末尾の空白を失わないようにする。
+            if (TryGetTextTransformBody(inner, out bool useRegex, out string transformBody))
+            {
+                return ExpandTextTransform(transformBody, original, context, depth, useRegex);
+            }
+
             string trimmed = inner.Trim();
 
             // 計算式は式の中に差し込みを書けるので、名前の解析より先に振り分ける
@@ -976,6 +1059,209 @@ namespace MyTaskTray.Services
                 // 式が誤っていればそのまま残し、コピー結果から気付けるようにする
                 return original;
             }
+        }
+
+        /// <summary>
+        /// <c>{replace:元の値|検索文字|置換文字}</c> と
+        /// <c>{regexreplace:元の値|パターン|置換文字}</c> を展開する。
+        /// 元の値だけは入れ子の差し込みとして展開し、残り 2 つはリテラルとして扱う。
+        /// </summary>
+        private static string ExpandTextTransform(
+            string body,
+            string original,
+            ExpandContext context,
+            int depth,
+            bool useRegex)
+        {
+            if (!TrySplitTextTransformArguments(
+                    body,
+                    out string sourceExpression,
+                    out string searchExpression,
+                    out string replacementExpression)
+                || string.IsNullOrWhiteSpace(sourceExpression))
+            {
+                return original;
+            }
+
+            // エスケープはテンプレート側へだけ適用する。
+            // 展開後に処理すると、クリップボード中の C:\new の \n まで改行になってしまう。
+            string sourceTemplate = DecodeTextTransformArgument(sourceExpression.Trim(), decodeBraces: false);
+            string source = Expand(sourceTemplate, context, depth + 1, false);
+            string search = DecodeTextTransformArgument(searchExpression, decodeBraces: true);
+            string replacement = DecodeTextTransformArgument(replacementExpression, decodeBraces: true);
+
+            if (string.IsNullOrEmpty(search))
+            {
+                // 空文字の置換はすべての文字間へ挿入する動作になり、意図しにくいので許可しない。
+                return original;
+            }
+
+            if (!useRegex)
+            {
+                return source.Replace(search, replacement, StringComparison.Ordinal);
+            }
+
+            try
+            {
+                return Regex.Replace(
+                    source,
+                    search,
+                    replacement,
+                    RegexOptions.CultureInvariant,
+                    RegexTimeout);
+            }
+            catch (ArgumentException)
+            {
+                // 正規表現または置換文字列が不正なら、書いたまま残して気付けるようにする。
+                return original;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return original;
+            }
+        }
+
+        /// <summary>文字列変換の名前を判定し、先頭の名前を除いた本体を返す。</summary>
+        private static bool TryGetTextTransformBody(
+            string inner,
+            out bool useRegex,
+            out string body)
+        {
+            string trimmed = inner.TrimStart();
+            const string ReplacePrefix = "replace:";
+            const string RegexReplacePrefix = "regexreplace:";
+
+            if (trimmed.StartsWith(RegexReplacePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                useRegex = true;
+                body = trimmed[RegexReplacePrefix.Length..];
+                return true;
+            }
+
+            if (trimmed.StartsWith(ReplacePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                useRegex = false;
+                body = trimmed[ReplacePrefix.Length..];
+                return true;
+            }
+
+            useRegex = false;
+            body = string.Empty;
+            return false;
+        }
+
+        /// <summary>
+        /// 文字列変換の 3 引数を、入れ子の差し込み内にある <c>|</c> を避けて分割する。
+        /// <c>\|</c> は引数内の文字として扱う。
+        /// </summary>
+        private static bool TrySplitTextTransformArguments(
+            string body,
+            out string source,
+            out string search,
+            out string replacement)
+        {
+            List<string> arguments = [];
+            int start = 0;
+            int depth = 0;
+
+            for (int i = 0; i < body.Length; i++)
+            {
+                char c = body[i];
+
+                if (c == '\\' && i + 1 < body.Length)
+                {
+                    // \| だけでなく、\\ や \n も後段のデコードまでそのまま保持する。
+                    i++;
+                    continue;
+                }
+
+                if (c is '{' or '}')
+                {
+                    if (i + 1 < body.Length && body[i + 1] == c)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    depth += c == '{' ? 1 : -1;
+                    continue;
+                }
+
+                if (c == '|' && depth == 0)
+                {
+                    arguments.Add(body[start..i]);
+                    start = i + 1;
+                }
+            }
+
+            arguments.Add(body[start..]);
+            if (arguments.Count != 3 || depth != 0)
+            {
+                source = string.Empty;
+                search = string.Empty;
+                replacement = string.Empty;
+                return false;
+            }
+
+            source = arguments[0];
+            search = arguments[1];
+            replacement = arguments[2];
+            return true;
+        }
+
+        /// <summary>
+        /// 文字列変換の引数で使えるエスケープを戻す。
+        /// 未知の <c>\x</c> は正規表現へそのまま渡せるよう保持する。
+        /// </summary>
+        private static string DecodeTextTransformArgument(string value, bool decodeBraces)
+        {
+            StringBuilder result = new(value.Length);
+
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '\\' && i + 1 < value.Length)
+                {
+                    char escaped = value[++i];
+                    switch (escaped)
+                    {
+                        case '|':
+                            result.Append('|');
+                            break;
+                        case 'n':
+                            result.Append('\n');
+                            break;
+                        case 'r':
+                            result.Append('\r');
+                            break;
+                        case 't':
+                            result.Append('\t');
+                            break;
+                        case '\\':
+                            result.Append('\\');
+                            break;
+                        default:
+                            result.Append('\\').Append(escaped);
+                            break;
+                    }
+
+                    continue;
+                }
+
+                if (decodeBraces
+                    && c is '{' or '}'
+                    && i + 1 < value.Length
+                    && value[i + 1] == c)
+                {
+                    result.Append(c);
+                    i++;
+                    continue;
+                }
+
+                result.Append(c);
+            }
+
+            return result.ToString();
         }
 
         /// <summary>展開結果がそのまま数値として読めるかどうか。</summary>

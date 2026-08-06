@@ -86,6 +86,9 @@ namespace MyTaskTray.Services
             }
 
             loaded.Items ??= [];
+            loaded.ActionStates = loaded.ActionStates is null
+                ? new Dictionary<string, bool>(StringComparer.Ordinal)
+                : new Dictionary<string, bool>(loaded.ActionStates, StringComparer.Ordinal);
 
             // nullable 注釈が付いていない List<ClipItem> でも、JSON の配列には null を書ける。
             // そのまま EnsureIds() へ渡すと起動時に NullReferenceException になるため、

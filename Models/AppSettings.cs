@@ -32,6 +32,13 @@ namespace MyTaskTray.Models
         public string MenuHotKey { get; set; } = string.Empty;
 
         /// <summary>
+        /// 組み込みアクションをメニューへ表示するかどうか。キーは安定したアクション ID。
+        /// 記録がないアクションは、アクション定義側の既定値を使う。
+        /// </summary>
+        public Dictionary<string, bool> ActionStates { get; set; }
+            = new(StringComparer.Ordinal);
+
+        /// <summary>
         /// スプリントの区切りを数え始める日（どれか 1 つのスプリントの開始日）。
         /// null なら未設定で、<c>@sprint</c> を使った差し込みは展開されない。
         /// </summary>
@@ -73,7 +80,25 @@ namespace MyTaskTray.Models
                 new() { IsSeparator = true },
                 new() { Category = "定型文", Name = "お礼", Text = "お世話になっております。ご対応ありがとうございました。" },
                 new() { Category = "定型文", Name = "確認依頼", Text = "ご確認のほど、よろしくお願いいたします。" },
-                new() { Category = "定型文", Name = "議事録の見出し", Text = "# {date:yyyy/MM/dd} 定例ミーティング 議事録" },
+                // Markdown として載せると、Word や Slack へ貼ったときに見出しになる。
+                // エディタへ貼れば書いたままの「# …」が入る
+                new()
+                {
+                    Category = "定型文",
+                    Name = "議事録の見出し",
+                    Text = "# {date:yyyy/MM/dd} 定例ミーティング 議事録",
+                    Format = ClipFormat.Markdown,
+                },
+                new()
+                {
+                    Category = "定型文",
+                    Name = "議事録のひな形",
+                    // 改行は CRLF にする。設定画面のテキストボックスが返すのも CRLF なので、
+                    // 既定の項目だけ LF だと、編集して保存しただけで差分が出てしまう
+                    Text = "# {date:yyyy/MM/dd} 定例ミーティング 議事録\r\n\r\n"
+                        + "## 決定事項\r\n\r\n- \r\n\r\n## 宿題\r\n\r\n- \r\n",
+                    Format = ClipFormat.Markdown,
+                },
                 new()
                 {
                     Category = "定型文",
@@ -88,9 +113,16 @@ namespace MyTaskTray.Models
             Version = Version,
             ShowCopyNotification = ShowCopyNotification,
             MenuHotKey = MenuHotKey,
+            ActionStates = new(ActionStates ?? [], StringComparer.Ordinal),
             SprintAnchorDate = SprintAnchorDate,
             SprintLengthDays = SprintLengthDays,
             Items = [.. Items.Select(i => i.Clone())],
         };
+
+        /// <summary>保存済みの指定があれば使い、なければアクション固有の既定値を返す。</summary>
+        public bool IsActionVisible(string actionId, bool defaultEnabled)
+            => ActionStates is not null && ActionStates.TryGetValue(actionId, out bool visible)
+                ? visible
+                : defaultEnabled;
     }
 }

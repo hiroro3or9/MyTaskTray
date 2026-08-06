@@ -32,6 +32,30 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      tools\ 配下は本体に含めない。
+      このプロジェクトはリポジトリのルートにあるため、既定では **\*.cs を拾ってしまい、
+      確認用ツール (tools\ClipboardProbe) のソースまで本体へ取り込まれる。
+      Main が重複するなど、原因の分かりにくいビルドエラーになる。
+    -->
+    <Compile Remove="tools\**" />
+    <None Remove="tools\**" />
+    <Page Remove="tools\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      このプロジェクト唯一の外部依存。Markdown を HTML へ変換するために入れている。
+      CommonMark の仕様に忠実であることに手を掛ける価値は薄いと判断した（DESIGN_RICH_COPY.md §5-1）。
+
+      net10.0 向けの依存パッケージが 0 個なので、増える DLL はこれ 1 つだけ。
+      ライセンスは BSD-2-Clause。
+      差し替えたくなった場合に触るのは Services\MarkdownRenderer.cs だけで済むようにしてある。
+    -->
+    <PackageReference Include="Markdig" Version="1.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Resources\app.ico" />
   </ItemGroup>
 

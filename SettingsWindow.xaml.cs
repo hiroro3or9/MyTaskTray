@@ -33,7 +33,7 @@ namespace MyTaskTray
         private ListBoxItem? _dropIndicatorTarget;
 
         public SettingsWindow(AppSettings settings)
-            : this(settings, [])
+            : this(settings, [], [])
         {
         }
 
@@ -41,10 +41,18 @@ namespace MyTaskTray
         /// 直近に前面だったアプリの実行ファイル名。「現在のアプリ ▾」の候補に使う。
         /// </param>
         public SettingsWindow(AppSettings settings, IReadOnlyList<string> recentApps)
+            : this(settings, recentApps, [])
+        {
+        }
+
+        internal SettingsWindow(
+            AppSettings settings,
+            IReadOnlyList<string> recentApps,
+            IReadOnlyList<TrayActionDefinition> actions)
         {
             InitializeComponent();
 
-            _vm = new SettingsViewModel(settings, recentApps);
+            _vm = new SettingsViewModel(settings, recentApps, actions);
             DataContext = _vm;
 
             FolderButton.ToolTip = "設定ファイル: " + SettingsStore.FilePath;
@@ -468,6 +476,11 @@ namespace MyTaskTray
                 DispatcherPriority.Input);
         }
 
+        private void OnOpenActionSettings(object sender, RoutedEventArgs e)
+        {
+            ActionSettingsPopup.IsOpen = true;
+        }
+
         // ==================================================================
         // 差し込みの挿入
         // ==================================================================
@@ -610,6 +623,7 @@ namespace MyTaskTray
             AppPopup.IsOpen = false;
             HotKeyPopup.IsOpen = false;
             SprintPopup.IsOpen = false;
+            ActionSettingsPopup.IsOpen = false;
             e.Handled = true;
         }
 
@@ -694,7 +708,8 @@ namespace MyTaskTray
                 return;
             }
 
-            if (ClipboardService.TryCopy(value))
+            // プレビューは既に形式ごとの後処理を通してあるので、ここでは載せ方だけを合わせる
+            if (ClipboardService.TryCopy(value, _vm.SelectedItem?.Format ?? ClipFormat.Plain))
             {
                 ToastWindow.ShowToast("コピーしました", TemplateEngine.ToSingleLine(value, 120));
             }
@@ -971,13 +986,14 @@ namespace MyTaskTray
             // ここで拾わないと IsCancel のキャンセルボタンが反応して設定画面ごと閉じてしまう。
             if (e.Key == Key.Escape
                 && (InsertPopup.IsOpen || CategoryPopup.IsOpen || AppPopup.IsOpen
-                    || HotKeyPopup.IsOpen || SprintPopup.IsOpen))
+                    || HotKeyPopup.IsOpen || SprintPopup.IsOpen || ActionSettingsPopup.IsOpen))
             {
                 InsertPopup.IsOpen = false;
                 CategoryPopup.IsOpen = false;
                 AppPopup.IsOpen = false;
                 HotKeyPopup.IsOpen = false;
                 SprintPopup.IsOpen = false;
+                ActionSettingsPopup.IsOpen = false;
                 e.Handled = true;
                 return;
             }
