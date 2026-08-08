@@ -49,10 +49,19 @@ namespace MyTaskTray
             AppSettings settings,
             IReadOnlyList<string> recentApps,
             IReadOnlyList<TrayActionDefinition> actions)
+            : this(settings, recentApps, actions, ForegroundApp.Unknown)
+        {
+        }
+
+        internal SettingsWindow(
+            AppSettings settings,
+            IReadOnlyList<string> recentApps,
+            IReadOnlyList<TrayActionDefinition> actions,
+            ForegroundApp appContext)
         {
             InitializeComponent();
 
-            _vm = new SettingsViewModel(settings, recentApps, actions);
+            _vm = new SettingsViewModel(settings, recentApps, actions, appContext);
             DataContext = _vm;
 
             FolderButton.ToolTip = "設定ファイル: " + SettingsStore.FilePath;
@@ -87,6 +96,10 @@ namespace MyTaskTray
 
         /// <summary>保存して閉じた場合に true。</summary>
         public bool Saved { get; private set; }
+
+        /// <summary>最新の前面アプリを app 系差し込みのプレビューへ反映する。</summary>
+        internal void NotifyAppContext(ForegroundApp appContext)
+            => _vm.UpdateAppContext(appContext);
 
         /// <summary>
         /// トレイからのコピーで連番が進んだことを受け取り、画面の「次の番号」に反映する。

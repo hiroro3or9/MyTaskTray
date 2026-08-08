@@ -84,7 +84,8 @@ namespace MyTaskTray
 
         private readonly record struct MenuEntry(
             ClipItem Item,
-            IReadOnlyDictionary<string, string> Captures);
+            IReadOnlyDictionary<string, string> Captures,
+            ForegroundApp AppContext);
 
         // NotifyIcon が右クリック時に使っている内部処理。左クリックでも同じ見せ方をするために借りる。
         // 非公開メンバーなので将来の .NET で無くなる可能性があるが、
@@ -119,6 +120,11 @@ namespace MyTaskTray
         // メニューを組み立てる時点では前面が自分に変わっているため、ここで覚えておく
         private IntPtr _menuContextWindow;
         private ForegroundApp _menuContext = ForegroundApp.Unknown;
+
+        // 設定画面のプレビューでも app 系の差し込みを確認できるよう、
+        // 最後に取得できた外部アプリの情報をメニューを閉じたあとも覚えておく。
+        // メモリ上だけに置き、設定ファイルや履歴には保存しない
+        private ForegroundApp _lastKnownApp = ForegroundApp.Unknown;
 
         // フォーカスを戻す先。_menuContextWindow と同じ値だが、寿命が違う。
         //
@@ -386,6 +392,12 @@ namespace MyTaskTray
 
             _menuContextWindow = window;
             _menuContext = app;
+
+            if (app.IsKnown)
+            {
+                _lastKnownApp = app;
+                _settingsWindow?.NotifyAppContext(app);
+            }
 
             // 閉じても消さない控え。理由はフィールドの説明を参照
             _focusReturnWindow = window;
@@ -769,14 +781,14 @@ namespace MyTaskTray
 
                 if (item.IsSeparator || item.ClipboardCondition == ClipboardMatchKind.Always)
                 {
-                    regular.Add(new MenuEntry(item, EmptyCaptures));
+                    regular.Add(new MenuEntry(item, EmptyCaptures, _menuContext));
                     continue;
                 }
 
                 ClipboardMatchResult result = ClipboardMatcher.Match(item, clipboard());
                 if (result.IsMatch)
                 {
-                    smart.Add(new MenuEntry(item, result.Captures));
+                    smart.Add(new MenuEntry(item, result.Captures, _menuContext));
                 }
             }
 
@@ -1350,7 +1362,12 @@ namespace MyTaskTray
                 ClipItem item = menuEntry.Item;
                 ToolStripItem entry = item.IsSeparator
                     ? new ToolStripSeparator()
-                    : CreateClipMenuItem(item, clipboard, menuEntry.Captures, enabled);
+                    : CreateClipMenuItem(
+                        item,
+                        clipboard,
+                        menuEntry.Captures,
+                        menuEntry.AppContext,
+                        enabled);
 
                 // 「日付」と「日付 」（末尾に空白）が別のサブメニューになってしまわないよう、
                 // 見た目で区別できない前後の空白は無視して同じカテゴリとして扱う
@@ -1544,10 +1561,22 @@ namespace MyTaskTray
             return () => cached ??= ClipboardService.GetText();
         }
 
+        /// <summary>
+        /// 1 回のメニュー操作で記録した前面アプリを、差し込みエンジンへ渡す値に加える。
+        /// タイトルを取れなかった場合は null とし、<c>{app:title}</c> を書いたまま残す。
+        /// </summary>
+        private static ExpandValues AddAppContext(ExpandValues values, ForegroundApp app)
+            => values with
+            {
+                AppName = app.IsKnown && app.Name.Length > 0 ? app.Name : null,
+                AppTitle = app.IsKnown && app.Title.Length > 0 ? app.Title : null,
+            };
+
         private ToolStripMenuItem CreateClipMenuItem(
             ClipItem item,
             Func<string> clipboard,
             IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext,
             bool enabled)
         {
             string label = string.IsNullOrWhiteSpace(item.Name) ? item.Text : item.Name;
@@ -1562,11 +1591,11 @@ namespace MyTaskTray
             {
                 Enabled = enabled,
                 ToolTipText = enabled
-                    ? BuildToolTip(item, clipboard, _settings.Sprint, captures)
+                    ? BuildToolTip(item, clipboard, _settings.Sprint, captures, appContext)
                     : BuildActiveSessionBlockedReason(),
                 Tag = item,
             };
-            menuItem.Click += (_, _) => ActivateClipItem(item, clipboard, captures);
+            menuItem.Click += (_, _) => ActivateClipItem(item, clipboard, captures, appContext);
             return menuItem;
         }
 
@@ -1575,17 +1604,18 @@ namespace MyTaskTray
             ClipItem item,
             Func<string> clipboard,
             SprintSchedule? sprint,
-            IReadOnlyDictionary<string, string> captures)
+            IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext)
         {
             string raw = Truncate(item.Text, 200);
             DateTime now = DateTime.Now;
 
-            ExpandValues values = new()
+            ExpandValues values = AddAppContext(new ExpandValues
             {
                 Clipboard = clipboard,
                 Sprint = sprint,
                 Matches = captures,
-            };
+            }, appContext);
 
             // 選択肢は、設定画面のプレビューと同じ規則で先頭のものを代表として出す
             string expanded = TemplateEngine.Expand(
@@ -1627,7 +1657,8 @@ namespace MyTaskTray
         private void ActivateClipItem(
             ClipItem item,
             Func<string> clipboard,
-            IReadOnlyDictionary<string, string> captures)
+            IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext)
         {
             // メニューを開いたあとに別経路でセッションが始まった場合も、
             // 実行中のデータを暗黙に破棄したり、収集内容へ定型文を混ぜたりしない。
@@ -1643,7 +1674,7 @@ namespace MyTaskTray
             IReadOnlyList<ChoiceDefinition> choices = TemplateEngine.GetChoiceDefinitions(item.Text);
             if (choices.Count == 0)
             {
-                ContinueActivateClipItem(item, clipboard, captures, null);
+                ContinueActivateClipItem(item, clipboard, captures, appContext, null);
                 return;
             }
 
@@ -1657,7 +1688,8 @@ namespace MyTaskTray
                 choices,
                 clipboard,
                 captures,
-                selected => ContinueActivateClipItem(item, clipboard, captures, selected));
+                appContext,
+                selected => ContinueActivateClipItem(item, clipboard, captures, appContext, selected));
         }
 
         /// <summary>選択が済んだあと（または選択が要らない場合）のコピー処理。</summary>
@@ -1665,6 +1697,7 @@ namespace MyTaskTray
             ClipItem item,
             Func<string> clipboard,
             IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext,
             IReadOnlyDictionary<string, string>? choices)
         {
             // 選択メニューを出しているあいだに別経路でセッションが始まっている可能性がある
@@ -1677,13 +1710,13 @@ namespace MyTaskTray
             IReadOnlyList<InputCaptureDefinition> inputs = TemplateEngine.GetInputDefinitions(item.Text);
             if (inputs.Count == 0)
             {
-                CopyToClipboard(item, clipboard, null, captures, choices);
+                CopyToClipboard(item, clipboard, null, captures, appContext, choices);
                 return;
             }
 
             bool preserveClipboard = item.HasSmartCondition || TemplateEngine.ContainsClipboard(item.Text);
             string sourceClipboard = preserveClipboard ? clipboard() : string.Empty;
-            StartCapture(item, inputs, sourceClipboard, captures, choices);
+            StartCapture(item, inputs, sourceClipboard, captures, appContext, choices);
         }
 
         private void StartCapture(
@@ -1691,6 +1724,7 @@ namespace MyTaskTray
             IReadOnlyList<InputCaptureDefinition> inputs,
             string sourceClipboard,
             IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext,
             IReadOnlyDictionary<string, string>? choices)
         {
             if (_actionSessions.HasActiveSession)
@@ -1734,7 +1768,7 @@ namespace MyTaskTray
                     }
 
                     _actionSessions.Complete(TrayActionIds.MultipleInput, session);
-                    CopyToClipboard(item, () => sourceClipboard, inputs, captures, choices);
+                    CopyToClipboard(item, () => sourceClipboard, inputs, captures, appContext, choices);
                     RebuildMenu();
                 },
                 timedOut: () =>
@@ -1807,6 +1841,7 @@ namespace MyTaskTray
             bool FromHotKey,
             Func<string> Clipboard,
             IReadOnlyDictionary<string, string> Captures,
+            ForegroundApp AppContext,
             Action<IReadOnlyDictionary<string, string>> Completed);
 
         /// <summary>
@@ -1818,6 +1853,7 @@ namespace MyTaskTray
             IReadOnlyList<ChoiceDefinition> definitions,
             Func<string> clipboard,
             IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext,
             Action<IReadOnlyDictionary<string, string>> completed)
         {
             // _menuContextWindow ではなくこちらを読む。
@@ -1837,6 +1873,7 @@ namespace MyTaskTray
                 FromHotKey: _menuOpenedFromHotKey,
                 Clipboard: clipboard,
                 Captures: captures,
+                AppContext: appContext,
                 Completed: completed);
 
             // ここで立てるのが要。いま呼び出し元のトレイメニューが閉じようとしていて、
@@ -2368,12 +2405,12 @@ namespace MyTaskTray
         private List<string> ResolveChoiceOptions(ChoicePrompt prompt, ChoiceDefinition definition)
         {
             DateTime now = DateTime.Now;
-            ExpandValues values = new()
+            ExpandValues values = AddAppContext(new ExpandValues
             {
                 Clipboard = prompt.Clipboard,
                 Sprint = _settings.Sprint,
                 Matches = prompt.Captures,
-            };
+            }, prompt.AppContext);
 
             List<string> resolved = new(definition.Options.Count);
             foreach (string option in definition.Options)
@@ -2400,13 +2437,13 @@ namespace MyTaskTray
                 prompt.Item.Text,
                 DateTime.Now,
                 prompt.Item.SequenceValue,
-                new ExpandValues
+                AddAppContext(new ExpandValues
                 {
                     Clipboard = prompt.Clipboard,
                     Sprint = _settings.Sprint,
                     Matches = prompt.Captures,
                     Choices = selected,
-                });
+                }, prompt.AppContext));
 
             return TemplateEngine.ToSingleLine(expanded, 200);
         }
@@ -2447,6 +2484,7 @@ namespace MyTaskTray
             Func<string> clipboardReader,
             IReadOnlyDictionary<string, string>? inputs,
             IReadOnlyDictionary<string, string> captures,
+            ForegroundApp appContext,
             IReadOnlyDictionary<string, string>? choices)
         {
             // クリップボードを開くと他アプリのコピー操作を妨げるうえ、ロックされていると
@@ -2482,7 +2520,7 @@ namespace MyTaskTray
                 item.Text,
                 DateTime.Now,
                 item.SequenceValue,
-                new ExpandValues
+                AddAppContext(new ExpandValues
                 {
                     Clipboard = () => clipboard,
                     Sprint = _settings.Sprint,
@@ -2494,7 +2532,7 @@ namespace MyTaskTray
                     // 利用者が書いたタグは生かしたまま、{input:…} や {choice:…} に入った
                     // & や < が壊れた HTML にならないようにするため
                     ValueTransform = ClipboardService.GetValueTransform(item.Format),
-                });
+                }, appContext));
 
             if (!ClipboardService.TryCopy(value, item.Format))
             {
@@ -2739,6 +2777,7 @@ namespace MyTaskTray
 
             if (_settingsWindow is not null)
             {
+                _settingsWindow.NotifyAppContext(_lastKnownApp);
                 _settingsWindow.Activate();
                 if (_settingsWindow.WindowState == WindowState.Minimized)
                 {
@@ -2750,7 +2789,8 @@ namespace MyTaskTray
             _settingsWindow = new SettingsWindow(
                 _settings.Clone(),
                 _recentApps,
-                _menuComposer.Definitions);
+                _menuComposer.Definitions,
+                _lastKnownApp);
             _settingsWindow.Closed += (_, _) =>
             {
                 bool saved = _settingsWindow?.Saved == true;

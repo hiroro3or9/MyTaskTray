@@ -92,6 +92,18 @@ namespace MyTaskTray.Services
         public IReadOnlyDictionary<string, string>? Matches { get; init; }
 
         /// <summary>
+        /// <c>{app:name}</c> に差し込む、メニューを開く直前に前面だったアプリの名前。
+        /// null の場合、app 系の差し込みは書いたままの文字列として残す。
+        /// </summary>
+        public string? AppName { get; init; }
+
+        /// <summary>
+        /// <c>{app:title}</c> に差し込む、メニューを開く直前に前面だったウィンドウのタイトル。
+        /// null の場合、タイトルを使う差し込みは書いたままの文字列として残す。
+        /// </summary>
+        public string? AppTitle { get; init; }
+
+        /// <summary>
         /// <c>{choice:名前}</c> に差し込む値。
         ///
         /// <para>
@@ -158,6 +170,7 @@ namespace MyTaskTray.Services
     /// 文字列置換: <c>{replace:元の値|検索文字|置換文字}</c>
     /// 正規表現置換: <c>{regexreplace:元の値|パターン|置換文字}</c>
     ///   例) {replace:{clip}| |-}  {regexreplace:{input:名前}|\s+|-}
+    /// 前面アプリ: <c>{app:name}</c> <c>{app:title}</c> <c>{app:title:/正規表現/}</c>
     /// <c>{{</c> と <c>}}</c> はそれぞれ <c>{</c> <c>}</c> のエスケープ。
     /// 解釈できない差し込み（未知の名前・基準・単位・書式、オフセットを付けられない差し込みなど）は、
     /// 書いたままの文字列を残してユーザーが誤りに気付けるようにする。
@@ -237,6 +250,10 @@ namespace MyTaskTray.Services
         /// <summary>設定画面の「差し込みを挿入」で提示する一覧（並び順がパネルの表示順になる）。</summary>
         public static IReadOnlyList<PlaceholderInfo> Placeholders { get; } =
         [
+            new("{app:name}", "前面アプリ", "メニューを開く直前に前面だったアプリ名（.exe は除く）"),
+            new("{app:title}", "前面アプリ", "メニューを開く直前に前面だったウィンドウのタイトル"),
+            new("{app:title:/Issue #(\\d+)/}", "前面アプリ", "タイトルを正規表現で取り出す（かっこがあればその中身）"),
+            new("{app:name:/^(.*)$/}", "前面アプリ", "アプリ名を正規表現で取り出す"),
             new("{clip}", "クリップボード", "いまコピーしてある文字列（前後の空白は取り除く）"),
             new("{clip:digits}", "クリップボード", "コピー済みの文字列から最初の数字だけを取り出す"),
             new("{clip:/ID-(\\d+)/}", "クリップボード", "正規表現で取り出す（かっこがあればその中身）"),
@@ -321,7 +338,9 @@ namespace MyTaskTray.Services
             SprintSchedule? sprint,
             IReadOnlyDictionary<string, string>? inputs,
             IReadOnlyDictionary<string, string>? matches,
-            IReadOnlyDictionary<string, string>? choices)
+            IReadOnlyDictionary<string, string>? choices,
+            string? appName,
+            string? appTitle)
         {
             private string? _clipboard;
 
@@ -340,6 +359,10 @@ namespace MyTaskTray.Services
             public IReadOnlyDictionary<string, string>? Inputs { get; } = inputs;
 
             public IReadOnlyDictionary<string, string>? Matches { get; } = matches;
+
+            public string? AppName { get; } = appName;
+
+            public string? AppTitle { get; } = appTitle;
 
             /// <summary>
             /// <c>{choice:名前}</c> に差し込む値。
@@ -377,7 +400,9 @@ namespace MyTaskTray.Services
                     values.Sprint,
                     values.Inputs,
                     values.Matches,
-                    values.Choices)
+                    values.Choices,
+                    values.AppName,
+                    values.AppTitle)
                 {
                     ValueTransform = values.ValueTransform,
                 },
@@ -522,6 +547,55 @@ namespace MyTaskTray.Services
 
             return name.Length is >= 1 and <= 80
                 && name.IndexOfAny(['{', '}', '\r', '\n']) < 0;
+        }
+
+        /// <summary>
+        /// <c>app:name</c> / <c>app:title</c> と、末尾に正規表現を付けた形を解析する。
+        /// 正規表現の書き方と取り出し規則は <c>{clip:/…/}</c>・<c>{input:…:/…/}</c> と揃える。
+        /// </summary>
+        private static bool TryParseAppToken(
+            string inner,
+            out string member,
+            out string? pattern)
+        {
+            const string Prefix = "app:";
+            string trimmed = inner.Trim();
+            if (!trimmed.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                member = string.Empty;
+                pattern = null;
+                return false;
+            }
+
+            string body = trimmed[Prefix.Length..].Trim();
+            int patternSeparator = body.IndexOf(":/", StringComparison.Ordinal);
+
+            if (patternSeparator < 0)
+            {
+                member = body;
+                pattern = null;
+            }
+            else
+            {
+                if (body.Length <= patternSeparator + 2 || body[^1] != '/')
+                {
+                    member = string.Empty;
+                    pattern = null;
+                    return false;
+                }
+
+                member = body[..patternSeparator].Trim();
+                pattern = body[(patternSeparator + 2)..^1];
+                if (pattern.Length == 0)
+                {
+                    member = string.Empty;
+                    pattern = null;
+                    return false;
+                }
+            }
+
+            return member.Equals("name", StringComparison.OrdinalIgnoreCase)
+                || member.Equals("title", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -1333,6 +1407,13 @@ namespace MyTaskTray.Services
 
             string trimmed = inner.Trim();
 
+            // app 系は「app:対象:/正規表現/」とコロンを 2 段使うため、
+            // 名前:書式の汎用パーサへ渡す前に専用の文法で読む。
+            if (TryParseAppToken(trimmed, out string appMember, out string? appPattern))
+            {
+                return ExpandAppToken(appMember, appPattern, original, context);
+            }
+
             // 計算式は式の中に差し込みを書けるので、名前の解析より先に振り分ける
             if (trimmed.StartsWith('='))
             {
@@ -1970,6 +2051,32 @@ namespace MyTaskTray.Services
         /// </summary>
         private static string ExtractByRegex(string value, string pattern, string original)
             => TryExtractByRegex(value, pattern, out string extracted) ? extracted : original;
+
+        /// <summary>
+        /// メニューを開く直前に記録した前面アプリの値を返す。
+        /// 値を取得できなかった場合や正規表現に一致しなかった場合は、
+        /// 他の差し込みと同じく書いたままを残して誤りに気付けるようにする。
+        /// </summary>
+        private static string ExpandAppToken(
+            string member,
+            string? pattern,
+            string original,
+            ExpandContext context)
+        {
+            string? value = member.ToLowerInvariant() switch
+            {
+                "name" => context.AppName,
+                "title" => context.AppTitle,
+                _ => null,
+            };
+
+            if (value is null)
+            {
+                return original;
+            }
+
+            return pattern is null ? value : ExtractByRegex(value, pattern, original);
+        }
 
         /// <summary>
         /// 正規表現に最初に一致した部分（キャプチャがあれば最初のキャプチャ）を返す。

@@ -73,6 +73,7 @@ namespace MyTaskTray.ViewModels
 
         private readonly ICollectionView _itemsView;
         private readonly Dictionary<string, bool> _actionStates;
+        private ForegroundApp _appContext;
 
         // 画面上で「次の番号」を直接編集した項目の Id。
         // 設定画面を開いている間にトレイ側で連番が進んでいた場合、
@@ -106,12 +107,12 @@ namespace MyTaskTray.ViewModels
         private string _clipboard = string.Empty;
 
         public SettingsViewModel(AppSettings settings)
-            : this(settings, [], [])
+            : this(settings, [], [], ForegroundApp.Unknown)
         {
         }
 
         public SettingsViewModel(AppSettings settings, IReadOnlyList<string> recentApps)
-            : this(settings, recentApps, [])
+            : this(settings, recentApps, [], ForegroundApp.Unknown)
         {
         }
 
@@ -119,8 +120,18 @@ namespace MyTaskTray.ViewModels
             AppSettings settings,
             IReadOnlyList<string> recentApps,
             IReadOnlyList<TrayActionDefinition> actions)
+            : this(settings, recentApps, actions, ForegroundApp.Unknown)
+        {
+        }
+
+        internal SettingsViewModel(
+            AppSettings settings,
+            IReadOnlyList<string> recentApps,
+            IReadOnlyList<TrayActionDefinition> actions,
+            ForegroundApp appContext)
         {
             Version = settings.Version;
+            _appContext = appContext;
             _showCopyNotification = settings.ShowCopyNotification;
             _menuHotKey = settings.MenuHotKey ?? string.Empty;
             _actionStates = new(settings.ActionStates ?? [], StringComparer.Ordinal);
@@ -758,6 +769,12 @@ namespace MyTaskTray.ViewModels
                     Clipboard = () => _clipboard,
                     Sprint = Sprint,
                     Matches = match.IsMatch ? match.Captures : null,
+                    AppName = _appContext.IsKnown && _appContext.Name.Length > 0
+                        ? _appContext.Name
+                        : null,
+                    AppTitle = _appContext.IsKnown && _appContext.Title.Length > 0
+                        ? _appContext.Title
+                        : null,
                 };
 
                 return TemplateEngine.Expand(
@@ -816,6 +833,22 @@ namespace MyTaskTray.ViewModels
         }
 
         /// <summary>
+        /// トレイメニューを開いたときに取得できた最新の外部アプリを、
+        /// app 系差し込みのプレビューへ反映する。
+        /// </summary>
+        internal void UpdateAppContext(ForegroundApp appContext)
+        {
+            if (!appContext.IsKnown || appContext == _appContext)
+            {
+                return;
+            }
+
+            _appContext = appContext;
+            OnPropertyChanged(nameof(Preview));
+            RebuildPlaceholderSamples();
+        }
+
+        /// <summary>
         /// 覚えているクリップボードの内容のまま、差し込み一覧の「現在値」を作り直す。
         /// スプリントの入力欄のように 1 文字ごとに呼ばれる場面では、
         /// 毎回クリップボードを開くと他アプリのコピー操作と競合するため、読み直さない。
@@ -830,6 +863,12 @@ namespace MyTaskTray.ViewModels
             {
                 Clipboard = () => _clipboard,
                 Sprint = sprint,
+                AppName = _appContext.IsKnown && _appContext.Name.Length > 0
+                    ? _appContext.Name
+                    : null,
+                AppTitle = _appContext.IsKnown && _appContext.Title.Length > 0
+                    ? _appContext.Title
+                    : null,
             };
 
             foreach (PlaceholderRow row in Placeholders)

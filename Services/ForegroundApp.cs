@@ -19,6 +19,13 @@ namespace MyTaskTray.Services
 
         /// <summary>プロセス名を取れているかどうか。取れていない場合は絞り込みを行わない。</summary>
         public bool IsKnown => !string.IsNullOrEmpty(ProcessName);
+
+        /// <summary>
+        /// 差し込みや画面表示で使う短いアプリ名。実行ファイル名末尾の <c>.exe</c> は除く。
+        /// </summary>
+        public string Name => ProcessName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? ProcessName[..^4]
+            : ProcessName;
     }
 
     /// <summary>前面ウィンドウからプロセス名とタイトルを取り出す。</summary>
@@ -26,7 +33,7 @@ namespace MyTaskTray.Services
     {
         /// <summary>
         /// タイトルとして読み込む上限。数 KB のタイトルを付けるアプリがあるため、
-        /// 判定に使う分だけ取る。
+        /// 表示条件と差し込みに使う分だけ取る。
         /// </summary>
         private const int MaxTitleLength = 512;
 
