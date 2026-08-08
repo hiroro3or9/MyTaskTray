@@ -19,7 +19,7 @@ namespace MyTaskTray.Services
 
             (Color background, Color text, Color hover, Color border, Color disabled) = ThemeManager.TrayMenuColors;
             DarkColorTable table = new(background, hover, border);
-            DarkRenderer renderer = new(table, text, disabled);
+            DarkRenderer renderer = new(table, text, disabled, background, hover);
 
             menu.BackColor = background;
             menu.ForeColor = text;
@@ -89,9 +89,26 @@ namespace MyTaskTray.Services
             public override Color SeparatorDark => _border;
 
             public override Color SeparatorLight => _background;
+
+            // チェック済み項目の箱。既定は明るい水色で、暗いメニューの中で浮く。
+            // 実際の描画は DarkRenderer が自前で行うが、
+            // 別の経路でこれらが参照されても浮かないよう塞いでおく
+            public override Color CheckBackground => _hover;
+
+            public override Color CheckSelectedBackground => _hover;
+
+            public override Color CheckPressedBackground => _hover;
+
+            public override Color ButtonSelectedBorder => _border;
         }
 
-        private sealed class DarkRenderer(ProfessionalColorTable colorTable, Color text, Color disabled) : ToolStripProfessionalRenderer(colorTable)
+        private sealed class DarkRenderer(
+            ProfessionalColorTable colorTable,
+            Color text,
+            Color disabled,
+            Color background,
+            Color hover)
+            : ToolStripProfessionalRenderer(colorTable)
         {
             protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
             {
@@ -103,6 +120,35 @@ namespace MyTaskTray.Services
             {
                 e.ArrowColor = e.Item is null || e.Item.Enabled ? text : disabled;
                 base.OnRenderArrow(e);
+            }
+
+            /// <summary>
+            /// チェック済み項目（<c>{choices}</c> の選択肢）の印を描く。
+            ///
+            /// <para>
+            /// 既定の描画は<strong>明るい箱を敷いたうえに、システム色のチェックを重ねる</strong>。
+            /// 暗いメニューではその箱だけが白く浮く。
+            /// かといって色表だけを暗くすると、今度はチェック自体が
+            /// 暗い地に暗い線で描かれて見えなくなる。
+            /// </para>
+            /// <para>
+            /// 地とチェックの両方をこちらで決める必要があるため、
+            /// <c>base</c> を呼ばずに描き切る。
+            /// </para>
+            /// </summary>
+            protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+            {
+                Rectangle rect = e.ImageRectangle;
+                if (rect.Width <= 0 || rect.Height <= 0)
+                {
+                    return;
+                }
+
+                // カーソルが乗っている行は行全体が hover 色で塗られている。
+                // 地をそれに合わせないと、チェックの周りだけ四角く色が違って見える
+                Color back = e.Item is { Selected: true, Enabled: true } ? hover : background;
+
+                ControlPaint.DrawMenuGlyph(e.Graphics, rect, MenuGlyph.Checkmark, text, back);
             }
         }
     }

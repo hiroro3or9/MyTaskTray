@@ -186,6 +186,13 @@ namespace MyTaskTray.Models
         [JsonIgnore]
         public bool UsesInputs => TemplateEngine.GetInputNames(Text).Count > 0;
 
+        /// <summary>
+        /// <c>{choice:名前:選択肢|選択肢}</c> を使うかどうか。
+        /// 書き方を誤っていても true になる（設定画面で理由を出すため）。
+        /// </summary>
+        [JsonIgnore]
+        public bool UsesChoices => TemplateEngine.ContainsChoice(Text);
+
         /// <summary>クリップボードに応じて表示されるスマートアクションかどうか。</summary>
         [JsonIgnore]
         public bool HasSmartCondition => ClipboardCondition != ClipboardMatchKind.Always;

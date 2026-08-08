@@ -182,7 +182,14 @@ namespace MyTaskTray.ViewModels
                 new(
                     ClipFormat.Html,
                     "HTML",
-                    "書いた内容を HTML として扱います。タグを直接書きたい場合に使います。"),
+
+                    // 改行のことは必ず書く。HTML では生の改行がただの空白になるため、
+                    // 複数行を書いた項目が Word や Slack で 1 行に潰れる。
+                    // プレーンテキストでは改行が残るので、貼り付け先によって結果が違い、
+                    // 何が起きているのか分かりにくい
+                    "書いた内容を HTML として扱います。タグを直接書きたい場合に使います。"
+                        + "改行を書いても Word や Slack では行が変わりません（<br> や <p> が要ります）。"
+                        + "「- 」で箇条書きにしたい場合は Markdown を選んでください。"),
             ];
 
             _itemsView = CollectionViewSource.GetDefaultView(Items);
@@ -515,6 +522,8 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(CanReorder));
                 OnPropertyChanged(nameof(IsItemEditable));
                 OnPropertyChanged(nameof(IsSequenceVisible));
+                OnPropertyChanged(nameof(IsChoiceVisible));
+                OnPropertyChanged(nameof(ChoiceStatus));
                 OnPropertyChanged(nameof(ShowEditorHint));
                 OnPropertyChanged(nameof(EditorHint));
                 OnPropertyChanged(nameof(Preview));
@@ -543,6 +552,83 @@ namespace MyTaskTray.ViewModels
 
         /// <summary>選択項目が連番を使っているときだけ、連番の設定欄を出す。</summary>
         public bool IsSequenceVisible => IsItemEditable && SelectedItem!.UsesSequence;
+
+        /// <summary>選択項目が <c>{choice:…}</c> を使っているときだけ、選択肢の説明を出す。</summary>
+        public bool IsChoiceVisible => IsItemEditable && SelectedItem!.UsesChoices;
+
+        /// <summary>
+        /// 選択項目の <c>{choice:…}</c> の内訳と、書き方の誤り。
+        ///
+        /// <para>
+        /// 誤りのある選択肢は展開されず、書いたままの文字列がコピーされる。
+        /// 放っておいてもコピー結果から気付けるが、気付くのが「貼り付けたあと」になるため、
+        /// スマート条件の説明（<see cref="ClipboardConditionStatus"/>）と同じ形でここに出す。
+        /// </para>
+        /// </summary>
+        public string ChoiceStatus
+        {
+            get
+            {
+                if (!IsItemEditable)
+                {
+                    return string.Empty;
+                }
+
+                ChoiceAnalysis analysis = TemplateEngine.AnalyzeChoices(SelectedItem!.Text);
+                List<string> lines = [];
+
+                if (analysis.Definitions.Count > 0)
+                {
+                    string list = string.Join(
+                        " → ",
+                        analysis.Definitions.Select(d => d.AllowMultiple
+                            ? $"{d.Name}（{d.Options.Count} 個から複数）"
+                            : $"{d.Name}（{d.Options.Count} 択）"));
+
+                    lines.Add($"{analysis.Definitions.Count} か所で選びます: {list}");
+
+                    // プレビューは「実際にコピーされる文字列」と説明しているので、
+                    // 代表値を見せていることを黙っていない
+                    lines.Add("プレビューには先頭の選択肢を表示しています。");
+                }
+
+                foreach (ChoiceIssue issue in analysis.Issues)
+                {
+                    lines.Add(DescribeChoiceIssue(issue));
+                }
+
+                return string.Join("\n", lines);
+            }
+        }
+
+        private static string DescribeChoiceIssue(ChoiceIssue issue) => issue.Kind switch
+        {
+            ChoiceIssueKind.NameHasPipe
+                => $"「{issue.Name}」: 名前に | は使えません。"
+                    + "{choice:名前:選択肢|選択肢} の形で、先に名前を書いてください。",
+
+            ChoiceIssueKind.TooFewOptions
+                => $"「{issue.Name}」: 選択肢は | で区切って "
+                    + $"{TemplateEngine.MinChoiceOptions}〜{TemplateEngine.MaxChoiceOptions} 個書いてください。",
+
+            ChoiceIssueKind.TooManyOptions
+                => $"「{issue.Name}」: 選択肢が多すぎます（{TemplateEngine.MaxChoiceOptions} 個まで）。",
+
+            ChoiceIssueKind.Duplicate
+                => $"「{issue.Name}」: 同じ名前の定義が 2 つ以上あります。最初のものを使います。",
+
+            ChoiceIssueKind.Undefined
+                => $"「{issue.Name}」: 選択肢が書かれていません。"
+                    + $"どこかに {{choice:{issue.Name}:選択肢|選択肢}} と書いてください。",
+
+            ChoiceIssueKind.UnsupportedPlaceholderInOption
+                => $"「{issue.Name}」: 選択肢の中では "
+                    + "{input:…} {choice:…} {choices:…} {seq} は使えません。"
+                    + "（{date} や {clip} などは使えます）",
+
+            _ => string.Empty,
+        };
+
 
         /// <summary>選択項目のスマート条件の説明と、現在のクリップボードに対する判定。</summary>
         public string ClipboardConditionStatus
@@ -663,19 +749,33 @@ namespace MyTaskTray.ViewModels
                 ClipboardMatchResult match = SelectedItem.HasSmartCondition
                     ? ClipboardMatcher.Match(SelectedItem, _clipboard)
                     : ClipboardMatchResult.NoMatch;
+
+                DateTime now = DateTime.Now;
+                int sequence = SelectedItem.SequenceValue;
+
+                ExpandValues values = new()
+                {
+                    Clipboard = () => _clipboard,
+                    Sprint = Sprint,
+                    Matches = match.IsMatch ? match.Captures : null,
+                };
+
                 return TemplateEngine.Expand(
                     SelectedItem.Text,
-                    DateTime.Now,
-                    SelectedItem.SequenceValue,
-                    () => _clipboard,
-                    Sprint,
-                    null,
-                    match.IsMatch ? match.Captures : null,
+                    now,
+                    sequence,
+                    values with
+                    {
+                        // 選ぶのはコピーのときなので、ここでは先頭の選択肢を代表として使う。
+                        // 代表値であることは ChoiceStatus で伝える
+                        Choices = TemplateEngine.GetDefaultChoices(
+                            SelectedItem.Text, now, sequence, values),
 
-                    // 実際にコピーされる文字列を出すのが目的なので、
-                    // 形式ごとの後処理もここで通しておく。通さないと、
-                    // HTML の項目でプレビューと実際のコピー内容が食い違う
-                    ClipboardService.GetValueTransform(SelectedItem.Format));
+                        // 実際にコピーされる文字列を出すのが目的なので、
+                        // 形式ごとの後処理もここで通しておく。通さないと、
+                        // HTML の項目でプレビューと実際のコピー内容が食い違う
+                        ValueTransform = ClipboardService.GetValueTransform(SelectedItem.Format),
+                    });
             }
         }
 
@@ -726,10 +826,26 @@ namespace MyTaskTray.ViewModels
             int sequence = SelectedItem?.SequenceValue ?? 1;
             SprintSchedule? sprint = Sprint;
 
+            ExpandValues values = new()
+            {
+                Clipboard = () => _clipboard,
+                Sprint = sprint,
+            };
+
             foreach (PlaceholderRow row in Placeholders)
             {
                 row.Sample = TemplateEngine.ToSingleLine(
-                    TemplateEngine.Expand(row.Token, now, sequence, () => _clipboard, sprint), 60);
+                    TemplateEngine.Expand(
+                        row.Token,
+                        now,
+                        sequence,
+                        values with
+                        {
+                            // プレビューと同じ規則。選択肢は先頭のものを代表として出す
+                            Choices = TemplateEngine.GetDefaultChoices(
+                                row.Token, now, sequence, values),
+                        }),
+                    60);
             }
         }
 
@@ -971,6 +1087,8 @@ namespace MyTaskTray.ViewModels
                 case nameof(ClipItem.Text):
                     OnPropertyChanged(nameof(Preview));
                     OnPropertyChanged(nameof(IsSequenceVisible));
+                    OnPropertyChanged(nameof(IsChoiceVisible));
+                    OnPropertyChanged(nameof(ChoiceStatus));
                     OnPropertyChanged(nameof(NeedsPreviewRefresh));
                     break;
 

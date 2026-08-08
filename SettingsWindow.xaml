@@ -374,6 +374,12 @@
 
                         <!-- プレビュー -->
                         <StackPanel Grid.Row="7" Margin="0,12,0,0">
+                            <!-- 選択肢の内訳と書き方の誤り（{choice:…} を使っているときだけ表示） -->
+                            <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" FontSize="11"
+                                       Foreground="{DynamicResource Brush.Text.Secondary}"
+                                       Visibility="{Binding IsChoiceVisible, Converter={StaticResource BoolToVis}}"
+                                       Text="{Binding ChoiceStatus}" />
+
                             <Grid Margin="0,0,0,4">
                                 <TextBlock Text="プレビュー（実際にコピーされる文字列）" VerticalAlignment="Center"
                                            Style="{StaticResource FieldLabel}" Margin="0" />

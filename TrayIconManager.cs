@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms;
@@ -35,6 +36,51 @@ namespace MyTaskTray
 
         private static readonly IReadOnlyDictionary<string, string> EmptyCaptures
             = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // 同じ ContextMenuStrip は開くたびに中身を作り直す。
+        // KeyDown をそのたびに追加すると、1 回の押下で過去のハンドラーまで全部動くため、
+        // ドロップダウンごとに 1 個だけ持ち、現在の番号一覧だけを更新する。
+        private static readonly ConditionalWeakTable<ToolStripDropDown, NumberKeyBinding>
+            NumberKeyBindings = [];
+
+        private sealed class NumberKeyBinding
+        {
+            private IReadOnlyList<ToolStripMenuItem> _numbered = [];
+            private readonly HashSet<Keys> _pressed = [];
+
+            public NumberKeyBinding(ToolStripDropDown dropDown)
+            {
+                dropDown.KeyDown += OnKeyDown;
+                dropDown.KeyUp += OnKeyUp;
+                dropDown.Closed += (_, _) => _pressed.Clear();
+            }
+
+            public void Update(IReadOnlyList<ToolStripMenuItem> numbered)
+            {
+                _numbered = numbered;
+                _pressed.Clear();
+            }
+
+            private void OnKeyDown(object? sender, KeyEventArgs e)
+            {
+                if (NumberKeyToIndex(e.KeyCode) < 0)
+                {
+                    return;
+                }
+
+                // KeyDown は長押し中も繰り返される。離すまでは最初の 1 回だけ通す。
+                if (!_pressed.Add(e.KeyCode))
+                {
+                    SuppressKey(e);
+                    return;
+                }
+
+                ActivateNumberedItem(_numbered, e);
+            }
+
+            private void OnKeyUp(object? sender, KeyEventArgs e)
+                => _pressed.Remove(e.KeyCode);
+        }
 
         private readonly record struct MenuEntry(
             ClipItem Item,
@@ -73,6 +119,22 @@ namespace MyTaskTray
         // メニューを組み立てる時点では前面が自分に変わっているため、ここで覚えておく
         private IntPtr _menuContextWindow;
         private ForegroundApp _menuContext = ForegroundApp.Unknown;
+
+        // フォーカスを戻す先。_menuContextWindow と同じ値だが、寿命が違う。
+        //
+        // メニューが閉じると ClearMenuContext() が _menuContextWindow を捨てる。
+        // ところが WinForms は「閉じる → 項目の Click」の順に処理するため、
+        // Click の中（＝ ActivateClipItem）から読むと必ず空になっている。
+        // {choice} の連鎖は最後にここへ戻す必要があるので、閉じても消さずに持つ
+        private IntPtr _focusReturnWindow;
+
+        // 直近にメニューを開いた操作がホットキーだったかどうか。
+        // {choice} の選択メニューを続けて出すとき、キーボードで選べる状態を引き継ぐために使う
+        private bool _menuOpenedFromHotKey;
+
+        // {choice} の選択メニューを出している最中かどうか。
+        // このあいだは RestoreForeground() を効かせない。理由は同メソッドを参照
+        private bool _choiceChainActive;
 
         public TrayIconManager()
         {
@@ -301,6 +363,10 @@ namespace MyTaskTray
                 return;
             }
 
+            // 右クリックは ShowTrayMenu を通らないので、ここで落としておかないと
+            // 直前にホットキーで開いたときの true が残る
+            _menuOpenedFromHotKey = false;
+
             CaptureMenuContext();
         }
 
@@ -320,10 +386,22 @@ namespace MyTaskTray
 
             _menuContextWindow = window;
             _menuContext = app;
+
+            // 閉じても消さない控え。理由はフィールドの説明を参照
+            _focusReturnWindow = window;
+
             RememberRecentApp(app);
         }
 
-        /// <summary>メニューを閉じたあと、覚えていた前面ウィンドウを捨てる。</summary>
+        /// <summary>
+        /// メニューを閉じたあと、覚えていた前面ウィンドウを捨てる。
+        ///
+        /// <para>
+        /// <c>_focusReturnWindow</c> は<strong>ここでは捨てない</strong>。
+        /// この処理は項目の <c>Click</c> より先に走るため、
+        /// ここで消すとクリック後にフォーカスの戻し先を見失う。
+        /// </para>
+        /// </summary>
         private void ClearMenuContext()
         {
             _menuContextWindow = IntPtr.Zero;
@@ -396,6 +474,8 @@ namespace MyTaskTray
                 return;
             }
 
+            _menuOpenedFromHotKey = fromHotKey;
+
             if (!fromHotKey)
             {
                 try
@@ -413,7 +493,7 @@ namespace MyTaskTray
                 }
             }
 
-            ShowMenuAtCursor(menu, fromHotKey);
+            _ = ShowMenuAtCursor(menu, fromHotKey);
         }
 
         /// <summary>
@@ -428,7 +508,39 @@ namespace MyTaskTray
         /// を再現して、通常のコンテキストメニューと同じ挙動にする。
         /// </para>
         /// </summary>
-        private void ShowMenuAtCursor(ContextMenuStrip menu, bool fromHotKey)
+        /// <param name="position">
+        /// 表示位置。既定（null）ではカーソル位置に出す。
+        /// <c>{choice}</c> の選択メニューのように何枚も続けて出す場合、
+        /// 1 枚目の位置を渡し続けると、その場でメニューが切り替わるように見える。
+        /// </param>
+        /// <param name="carriedForeground">
+        /// 連鎖の 1 枚目で覚えたウィンドウ。2 枚目以降はこれを引き継ぐ。
+        /// 2 枚目の時点では前面が <see cref="MenuHostWindow"/> になっているため、
+        /// ここで取り直すと「作業していたウィンドウ」を見失う。
+        /// </param>
+        /// <param name="restoreForegroundOnClose">
+        /// 閉じたときに元のウィンドウへフォーカスを戻すかどうか。
+        ///
+        /// <para>
+        /// <strong>連鎖の途中では false にする。</strong>
+        /// <see cref="RestoreForeground"/> は「前面がまだ <see cref="MenuHostWindow"/> のままなら戻す」
+        /// という条件で遅延実行するため、1 枚目を閉じた直後に 2 枚目を出すと
+        /// 次のように 2 枚目のフォーカスを奪ってしまう:
+        /// </para>
+        /// <code>
+        /// 1 枚目が閉じる → 復帰を予約
+        /// 2 枚目を表示   → SetForegroundWindow(_menuHost) で前面は _menuHost
+        /// 予約が走る     → 前面は _menuHost だ → 元のウィンドウへ戻す
+        ///                → 2 枚目がキー入力を受け取れなくなる
+        /// </code>
+        /// </param>
+        /// <returns>この表示で使った「戻す先」。連鎖の次の 1 枚へ引き継ぐ。</returns>
+        private IntPtr ShowMenuAtCursor(
+            ContextMenuStrip menu,
+            bool fromHotKey,
+            System.Drawing.Point? position = null,
+            IntPtr carriedForeground = default,
+            bool restoreForegroundOnClose = true)
         {
             // 前面化すると、それまで作業していたウィンドウからフォーカスが外れる。
             // このアプリは「コピーして、元の場所へ貼り付ける」ための道具なので、
@@ -437,9 +549,11 @@ namespace MyTaskTray
             // 開く操作を受け取った時点で覚えたウィンドウがあればそちらを使う。
             // トレイをクリックした場合、ここへ来るまでにタスクバーへ前面が移っていることがあり、
             // 押し下げの時点で覚えたほうが「作業していたウィンドウ」に近い
-            IntPtr previousForeground = _menuContextWindow != IntPtr.Zero
-                ? _menuContextWindow
-                : GetForegroundWindow();
+            IntPtr previousForeground = carriedForeground != IntPtr.Zero
+                ? carriedForeground
+                : _menuContextWindow != IntPtr.Zero
+                    ? _menuContextWindow
+                    : GetForegroundWindow();
 
             if (previousForeground == _menuHost.Handle)
             {
@@ -475,7 +589,7 @@ namespace MyTaskTray
 
             try
             {
-                menu.Show(System.Windows.Forms.Cursor.Position);
+                menu.Show(position ?? System.Windows.Forms.Cursor.Position);
             }
             finally
             {
@@ -485,7 +599,10 @@ namespace MyTaskTray
 
             // 表示できたあとで購読する。Show が例外で抜けた場合に
             // 購読だけが残って、次に閉じたときへ持ち越されるのを避ける
-            menu.Closed += RestoreForegroundOnce;
+            if (restoreForegroundOnClose)
+            {
+                menu.Closed += RestoreForegroundOnce;
+            }
 
             // オーナーを与えないと、メニューが独立したウィンドウとみなされて
             // タスクバーにボタンが現れることがある
@@ -499,6 +616,8 @@ namespace MyTaskTray
                 // ホットキーを押した手をマウスへ移さず、矢印キーと Enter で選べるようにする
                 SelectFirstEnabledItem(menu.Items);
             }
+
+            return previousForeground;
         }
 
         /// <summary>
@@ -530,6 +649,24 @@ namespace MyTaskTray
                 DispatcherPriority.Background,
                 new Action(() =>
                 {
+                    // {choice} の選択メニューを出している最中は戻さない。
+                    //
+                    // 項目をクリックしてトレイメニューが閉じると、そのメニューが
+                    // 「閉じたら元へ戻す」をここへ予約する。ところが選択メニューは
+                    // Normal 優先度で出るため、Background のこの処理より先に表示され、
+                    // _menuHost を前面にする。その直後にこれが走ると
+                    //
+                    //     前面はまだ _menuHost だ → 元のウィンドウへ戻そう
+                    //
+                    // と判断してフォーカスを奪い、出たばかりの選択メニューが
+                    // 活性を失って即座に閉じる（＝選択肢が出ないように見える）。
+                    //
+                    // 連鎖が終わったところで、こちらから明示的に戻している
+                    if (_choiceChainActive)
+                    {
+                        return;
+                    }
+
                     if (GetForegroundWindow() != host || !IsWindow(window))
                     {
                         return;
@@ -546,16 +683,10 @@ namespace MyTaskTray
         private static void HideExitItems(ContextMenuStrip menu)
         {
             ToolStripItem? separator = menu.Items[ExitSeparatorName];
-            if (separator is not null)
-            {
-                separator.Available = false;
-            }
+            separator?.Available = false;
 
             ToolStripItem? exit = menu.Items[ExitMenuItemName];
-            if (exit is not null)
-            {
-                exit.Available = false;
-            }
+            exit?.Available = false;
         }
 
         private static void SelectFirstEnabledItem(ToolStripItemCollection items)
@@ -754,7 +885,7 @@ namespace MyTaskTray
         }
 
         /// <summary>登録済みの組み込みアクションを「作業ツール」サブメニューへ追加する。</summary>
-        private void AddWorkToolsMenu(
+        private static void AddWorkToolsMenu(
             ToolStripItemCollection items,
             IReadOnlyList<(TrayActionDefinition Action, TrayActionAvailability Availability)> actions,
             TrayActionContext context)
@@ -1297,34 +1428,48 @@ namespace MyTaskTray
                 return;
             }
 
-            dropDown.KeyDown += (_, e) =>
+            NumberKeyBindings.GetValue(dropDown, static owner => new NumberKeyBinding(owner))
+                .Update(numbered);
+        }
+
+        /// <summary>
+        /// 数字キーに対応する項目を、マウスでクリックした場合と同じ経路で実行する。
+        /// 選択メニューは中身だけを差し替えるため、呼び出すたびに現在の一覧を渡せる形にしている。
+        /// </summary>
+        private static void ActivateNumberedItem(
+            IReadOnlyList<ToolStripMenuItem> numbered,
+            KeyEventArgs e)
+        {
+            int index = NumberKeyToIndex(e.KeyCode);
+            if (index < 0 || index >= numbered.Count)
             {
-                int index = NumberKeyToIndex(e.KeyCode);
-                if (index < 0 || index >= numbered.Count)
-                {
-                    return;
-                }
+                return;
+            }
 
-                ToolStripMenuItem target = numbered[index];
+            ToolStripMenuItem target = numbered[index];
 
-                // 数字がメニューの先頭文字移動などに二重に使われないよう、ここで止める
-                e.Handled = true;
-                e.SuppressKeyPress = true;
+            // 数字がメニューの先頭文字移動などに二重に使われないよう、ここで止める
+            SuppressKey(e);
 
-                if (target.HasDropDownItems)
-                {
-                    // カテゴリは開くだけ。中の番号は開いた先で 1 から振り直してある
-                    target.Select();
-                    target.ShowDropDown();
-                    target.DropDownItems.OfType<ToolStripMenuItem>()
-                        .FirstOrDefault(i => i.Enabled)?.Select();
-                    return;
-                }
+            if (target.HasDropDownItems)
+            {
+                // カテゴリは開くだけ。中の番号は開いた先で 1 から振り直してある
+                target.Select();
+                target.ShowDropDown();
+                target.DropDownItems.OfType<ToolStripMenuItem>()
+                    .FirstOrDefault(i => i.Enabled)?.Select();
+                return;
+            }
 
-                // マウスでクリックした場合と同じ経路を通す。
-                // メニューを閉じる処理とフォーカスの戻しも、これでそのまま効く
-                target.PerformClick();
-            };
+            // マウスでクリックした場合と同じ経路を通す。
+            // メニューを閉じる処理とフォーカスの戻しも、これでそのまま効く
+            target.PerformClick();
+        }
+
+        private static void SuppressKey(KeyEventArgs e)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
         }
 
         /// <summary>数字キーを 0 起点の番号に変換する。番号キーでなければ -1。</summary>
@@ -1336,6 +1481,10 @@ namespace MyTaskTray
             Keys.NumPad0 => 9,
             _ => -1,
         };
+
+        /// <summary>メニュー項目の決定に使われ、長押しを 1 回にまとめる必要があるキー。</summary>
+        private static bool IsChoiceActivationKey(Keys key)
+            => key is Keys.Enter or Keys.Space || NumberKeyToIndex(key) >= 0;
 
         /// <summary>
         /// メニュー項目の先頭に <c>1</c>〜<c>9</c>・<c>0</c> のアクセスキーを振る。
@@ -1429,24 +1578,50 @@ namespace MyTaskTray
             IReadOnlyDictionary<string, string> captures)
         {
             string raw = Truncate(item.Text, 200);
+            DateTime now = DateTime.Now;
+
+            ExpandValues values = new()
+            {
+                Clipboard = clipboard,
+                Sprint = sprint,
+                Matches = captures,
+            };
+
+            // 選択肢は、設定画面のプレビューと同じ規則で先頭のものを代表として出す
             string expanded = TemplateEngine.Expand(
-                item.Text, DateTime.Now, item.SequenceValue, clipboard, sprint, null, captures);
+                item.Text,
+                now,
+                item.SequenceValue,
+                values with
+                {
+                    Choices = TemplateEngine.GetDefaultChoices(
+                        item.Text, now, item.SequenceValue, values),
+                });
 
             IReadOnlyList<string> inputNames = TemplateEngine.GetInputNames(item.Text);
             string inputHint = inputNames.Count == 0
                 ? string.Empty
                 : "\n入力: " + string.Join(" → ", inputNames);
 
+            IReadOnlyList<ChoiceDefinition> choices = TemplateEngine.GetChoiceDefinitions(item.Text);
+            string choiceHint = choices.Count == 0
+                ? string.Empty
+                : "\n選択: " + string.Join(" → ", choices.Select(c => c.Name))
+                    + "（下は先頭の選択肢）";
+
+            string hints = choiceHint + inputHint;
+
             if (string.Equals(raw, Truncate(expanded, 200), StringComparison.Ordinal))
             {
-                return raw + inputHint;
+                return raw + hints;
             }
 
-            return raw + "\n→ " + Truncate(expanded, 200) + inputHint;
+            return raw + "\n→ " + Truncate(expanded, 200) + hints;
         }
 
         /// <summary>
         /// 入力のない項目はそのままコピーし、<c>{input:名前}</c> があればキャプチャを開始する。
+        /// <c>{choice:名前:…}</c> があれば、その前に選択肢のメニューを出す。
         /// スマートアクションの判定に使ったクリップボードとキャプチャは、完了まで同じ値を保持する。
         /// </summary>
         private void ActivateClipItem(
@@ -1456,6 +1631,43 @@ namespace MyTaskTray
         {
             // メニューを開いたあとに別経路でセッションが始まった場合も、
             // 実行中のデータを暗黙に破棄したり、収集内容へ定型文を混ぜたりしない。
+            //
+            // 選択肢のメニューを出すより先に確かめる。
+            // 選ばせてから「使用できません」と言うのは筋が悪い
+            if (_actionSessions.HasActiveSession)
+            {
+                ToastWindow.ShowToast("コピー項目を使用できません", BuildActiveSessionBlockedReason());
+                return;
+            }
+
+            IReadOnlyList<ChoiceDefinition> choices = TemplateEngine.GetChoiceDefinitions(item.Text);
+            if (choices.Count == 0)
+            {
+                ContinueActivateClipItem(item, clipboard, captures, null);
+                return;
+            }
+
+            // 選択が先、入力が後。
+            // {input:…} のキャプチャはクリップボードを 2 分間占有するため、
+            // その最中にメニューを何枚も出すとタイマーが動き続ける。
+            // 選択を先に済ませればセッションは中断なく進み、
+            // 途中で中止した場合も、まだ始まっていないので巻き戻す状態が無い
+            AskChoices(
+                item,
+                choices,
+                clipboard,
+                captures,
+                selected => ContinueActivateClipItem(item, clipboard, captures, selected));
+        }
+
+        /// <summary>選択が済んだあと（または選択が要らない場合）のコピー処理。</summary>
+        private void ContinueActivateClipItem(
+            ClipItem item,
+            Func<string> clipboard,
+            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyDictionary<string, string>? choices)
+        {
+            // 選択メニューを出しているあいだに別経路でセッションが始まっている可能性がある
             if (_actionSessions.HasActiveSession)
             {
                 ToastWindow.ShowToast("コピー項目を使用できません", BuildActiveSessionBlockedReason());
@@ -1465,20 +1677,21 @@ namespace MyTaskTray
             IReadOnlyList<InputCaptureDefinition> inputs = TemplateEngine.GetInputDefinitions(item.Text);
             if (inputs.Count == 0)
             {
-                CopyToClipboard(item, clipboard, null, captures);
+                CopyToClipboard(item, clipboard, null, captures, choices);
                 return;
             }
 
             bool preserveClipboard = item.HasSmartCondition || TemplateEngine.ContainsClipboard(item.Text);
             string sourceClipboard = preserveClipboard ? clipboard() : string.Empty;
-            StartCapture(item, inputs, sourceClipboard, captures);
+            StartCapture(item, inputs, sourceClipboard, captures, choices);
         }
 
         private void StartCapture(
             ClipItem item,
             IReadOnlyList<InputCaptureDefinition> inputs,
             string sourceClipboard,
-            IReadOnlyDictionary<string, string> captures)
+            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyDictionary<string, string>? choices)
         {
             if (_actionSessions.HasActiveSession)
             {
@@ -1521,7 +1734,7 @@ namespace MyTaskTray
                     }
 
                     _actionSessions.Complete(TrayActionIds.MultipleInput, session);
-                    CopyToClipboard(item, () => sourceClipboard, inputs, captures);
+                    CopyToClipboard(item, () => sourceClipboard, inputs, captures, choices);
                     RebuildMenu();
                 },
                 timedOut: () =>
@@ -1567,6 +1780,637 @@ namespace MyTaskTray
             ShowCapturePrompt(session.Progress, "複数入力を開始しました");
         }
 
+        /// <summary>
+        /// <c>{choice:名前:…}</c> の選択を 1 つずつ尋ねている途中の状態。
+        /// メニューを 1 枚出すたびに <c>Index</c> が進む。
+        /// </summary>
+        /// <param name="Origin">
+        /// 1 枚目を出した位置。以降も同じ場所に出して、その場で切り替わるように見せる。
+        /// カーソルに追従させると、選ぶたびにメニューが右下へずれていく。
+        /// </param>
+        /// <param name="PreviousForeground">
+        /// 連鎖の最後にフォーカスを戻す先。
+        /// <strong>連鎖を始める時点で捕まえておく必要がある。</strong>
+        /// 2 枚目以降は前面が <see cref="MenuHostWindow"/> になっているため、あとからは取り直せない。
+        /// 取り出し元が <c>_menuContextWindow</c> ではなく <c>_focusReturnWindow</c> なのは、
+        /// 前者がクリックより先に走る <see cref="ClearMenuContext"/> で消えてしまうから。
+        /// </param>
+        /// <param name="FromHotKey">ホットキー経路かどうか。連鎖のあいだ引き継ぐ。</param>
+        /// <param name="Clipboard">ツールチップに完成形を出すためのクリップボード読み取り。</param>
+        private sealed record ChoicePrompt(
+            ClipItem Item,
+            IReadOnlyList<ChoiceDefinition> Definitions,
+            Dictionary<string, string> Selected,
+            int Index,
+            System.Drawing.Point Origin,
+            IntPtr PreviousForeground,
+            bool FromHotKey,
+            Func<string> Clipboard,
+            IReadOnlyDictionary<string, string> Captures,
+            Action<IReadOnlyDictionary<string, string>> Completed);
+
+        /// <summary>
+        /// 選択肢を 1 つずつメニューで尋ね、すべて選び終えたら <paramref name="completed"/> を呼ぶ。
+        /// 途中で中止した場合は何も呼ばない（コピーもしない）。
+        /// </summary>
+        private void AskChoices(
+            ClipItem item,
+            IReadOnlyList<ChoiceDefinition> definitions,
+            Func<string> clipboard,
+            IReadOnlyDictionary<string, string> captures,
+            Action<IReadOnlyDictionary<string, string>> completed)
+        {
+            // _menuContextWindow ではなくこちらを読む。
+            // ここは項目の Click の中で、メニューの Closed（= ClearMenuContext）は
+            // それより先に走り終えているため、_menuContextWindow は既に空になっている
+            IntPtr previousForeground = _focusReturnWindow == _menuHost.Handle
+                ? IntPtr.Zero
+                : _focusReturnWindow;
+
+            ChoicePrompt prompt = new(
+                Item: item,
+                Definitions: definitions,
+                Selected: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Index: 0,
+                Origin: System.Windows.Forms.Cursor.Position,
+                PreviousForeground: previousForeground,
+                FromHotKey: _menuOpenedFromHotKey,
+                Clipboard: clipboard,
+                Captures: captures,
+                Completed: completed);
+
+            // ここで立てるのが要。いま呼び出し元のトレイメニューが閉じようとしていて、
+            // その「閉じたら元のウィンドウへ戻す」が予約される。
+            // 立てておかないと、その復帰が 1 枚目の選択メニューのフォーカスを奪う
+            // （RestoreForeground() の説明を参照）
+            _choiceChainActive = true;
+
+            // 選択メニューはドロップダウンが入力を掴んでいるあいだだけの一時的なもので、
+            // 閉じれば必ず終わる。ActionSessionManager へ登録すると、
+            // 連鎖のあいだ HasActiveSession が全項目を無効にしてしまい噛み合わない。
+            //
+            // 1 枚目もいまは出さない。ここは項目をクリックしたメニューの Click の中で、
+            // そのメニューはこれから閉じるところ。閉じる処理と重ねると後始末とぶつかる
+            InvokeAfterMenuClose(() => ShowChoiceMenu(prompt));
+        }
+
+        /// <summary>
+        /// 選択肢のメニューを 1 枚出す。
+        ///
+        /// <para>
+        /// ここは <see cref="InvokeAfterMenuClose"/> から呼ばれる。ディスパッチャのコールバックで
+        /// 例外を出すとアプリごと落ちるため、トレイメニューの表示
+        /// （<see cref="ShowMenuFromHotKey"/>）と同じく、捕まえて通知に変える。
+        /// </para>
+        /// <para>
+        /// あわせて連鎖の後始末をする。<c>_choiceChainActive</c> を立てたまま抜けると、
+        /// 以降フォーカスの復帰が効かなくなり、メニューを閉じても
+        /// 元のウィンドウへ戻らないアプリになってしまう。
+        /// </para>
+        /// </summary>
+        private void ShowChoiceMenu(ChoicePrompt prompt)
+        {
+            if (_disposed)
+            {
+                _choiceChainActive = false;
+                return;
+            }
+
+            try
+            {
+                ShowChoiceMenuCore(prompt);
+            }
+            catch (Exception ex)
+            {
+                _choiceChainActive = false;
+                RestoreForeground(prompt.PreviousForeground);
+                ToastWindow.ShowToast("選択肢を表示できませんでした", ex.Message);
+            }
+        }
+
+        private void ShowChoiceMenuCore(ChoicePrompt initialPrompt)
+        {
+            ContextMenuStrip menu = new()
+            {
+                // トレイメニューと同じ設定にする。チェック欄の有無だけは、
+                // 表示中の選択が単一か複数かに合わせて PopulateChoiceMenu() で切り替える
+                ShowImageMargin = false,
+            };
+
+            List<ToolStripMenuItem> numbered = [];
+            HashSet<Keys> pressedActivationKeys = [];
+            ChoicePrompt? pendingPrompt = null;
+            bool transitionDispatchPending = false;
+            bool closedByChoice = false;
+
+            // 1 つ選ぶたびにメニューを閉じて作り直すと、画面上では点滅して見える。
+            // 項目クリックによる自動クローズを止め、同じメニューの中身だけを差し替える。
+            menu.Closing += (_, e) =>
+            {
+                if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked)
+                {
+                    e.Cancel = true;
+                }
+            };
+
+            // 中身を差し替えてもハンドラーを積み増さないよう、キー処理はメニューへ 1 回だけ付ける。
+            // 数字・Enter・Space は、離すまで同じ押下として扱う。候補を切り替えた直後に
+            // キーリピートが次の候補まで決定してしまうのを防ぐため。
+            menu.KeyDown += (_, e) =>
+            {
+                if (!IsChoiceActivationKey(e.KeyCode))
+                {
+                    return;
+                }
+
+                if (!pressedActivationKeys.Add(e.KeyCode) || pendingPrompt is not null)
+                {
+                    SuppressKey(e);
+                    return;
+                }
+
+                ActivateNumberedItem(numbered, e);
+            };
+
+            menu.KeyUp += (_, e) =>
+            {
+                _ = pressedActivationKeys.Remove(e.KeyCode);
+                if (pressedActivationKeys.Count == 0 && pendingPrompt is not null)
+                {
+                    SchedulePendingMove();
+                }
+            };
+
+            void CompleteChoice(
+                ChoicePrompt completedPrompt,
+                Dictionary<string, string> selected)
+            {
+                closedByChoice = true;
+                menu.Close(ToolStripDropDownCloseReason.CloseCalled);
+
+                // 連鎖の終わり。ここで初めてフォーカスを元のウィンドウへ戻す。
+                _choiceChainActive = false;
+                RestoreForeground(completedPrompt.PreviousForeground);
+
+                // Close の後始末と重ならないよう、完了処理もメニューが落ち着いてから呼ぶ
+                InvokeAfterMenuClose(() => completedPrompt.Completed(selected));
+            }
+
+            void AbortChoice(ChoicePrompt prompt, Exception ex)
+            {
+                closedByChoice = true;
+                menu.Close(ToolStripDropDownCloseReason.CloseCalled);
+                _choiceChainActive = false;
+                RestoreForeground(prompt.PreviousForeground);
+                ToastWindow.ShowToast("選択肢を表示できませんでした", ex.Message);
+            }
+
+            void SchedulePendingMove()
+            {
+                if (transitionDispatchPending)
+                {
+                    return;
+                }
+
+                transitionDispatchPending = true;
+                InvokeAfterMenuItemClick(() =>
+                {
+                    transitionDispatchPending = false;
+
+                    if (!menu.Visible || _disposed)
+                    {
+                        return;
+                    }
+
+                    // 決定に使ったキーをまだ押している間は、現在の画面を保つ。
+                    // KeyUp が来た時点でもう一度ここへ予約される。
+                    if (pressedActivationKeys.Count > 0 || pendingPrompt is null)
+                    {
+                        return;
+                    }
+
+                    ChoicePrompt prompt = pendingPrompt;
+                    pendingPrompt = null;
+
+                    try
+                    {
+                        PopulateChoiceMenu(prompt);
+                        if (prompt.FromHotKey)
+                        {
+                            SelectFirstEnabledItem(menu.Items);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AbortChoice(prompt, ex);
+                    }
+                });
+            }
+
+            void MoveTo(ChoicePrompt prompt)
+            {
+                // Click の処理中に、その Click を送ってきた項目を破棄してはいけない。
+                // メニュー自体は開いたまま、イベントを抜けたあと、決定キーが離されてから
+                // 内容だけを入れ替える。
+                pendingPrompt = prompt;
+                SchedulePendingMove();
+            }
+
+            void AdvanceChoice(ChoicePrompt prompt, string name, string option)
+            {
+                Dictionary<string, string> selected = new(
+                    prompt.Selected,
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    [name] = option,
+                };
+
+                ChoicePrompt next = prompt with
+                {
+                    Selected = selected,
+                    Index = prompt.Index + 1,
+                };
+
+                if (next.Index >= next.Definitions.Count)
+                {
+                    CompleteChoice(next, selected);
+                    return;
+                }
+
+                MoveTo(next);
+            }
+
+            void GoBackChoice(ChoicePrompt prompt)
+            {
+                Dictionary<string, string> selected = new(
+                    prompt.Selected,
+                    StringComparer.OrdinalIgnoreCase);
+                selected.Remove(prompt.Definitions[prompt.Index - 1].Name);
+
+                MoveTo(prompt with
+                {
+                    Selected = selected,
+                    Index = prompt.Index - 1,
+                });
+            }
+
+            void PopulateChoiceMenu(ChoicePrompt prompt)
+            {
+                ChoiceDefinition definition = prompt.Definitions[prompt.Index];
+
+                // 選択肢に書かれた差し込みは、この画面を作るときに 1 回だけ展開する。
+                // 選んだあとに展開し直すと、{time} や {guid} のように評価のたびに変わるものが
+                // メニューで見た値と食い違う。以降は表示にも値にも、この文字列だけを使う
+                List<string> options = ResolveChoiceOptions(prompt, definition);
+                List<ToolStripMenuItem> numberCandidates = [];
+
+                menu.SuspendLayout();
+                try
+                {
+                    numbered.Clear();
+                    ClearAndDispose(menu.Items);
+
+                    // ShowImageMargin と ShowCheckMargin の両方が false だと WinForms は
+                    // Checked の印を描かないため、複数選択の画面だけチェック欄を出す
+                    menu.ShowCheckMargin = definition.AllowMultiple;
+
+                    string heading = definition.AllowMultiple ? "複数選択" : "選択";
+                    heading += prompt.Definitions.Count > 1
+                        ? $": {definition.Name} ({prompt.Index + 1}/{prompt.Definitions.Count})"
+                        : $": {definition.Name}";
+
+                    menu.Items.Add(new ToolStripMenuItem(EscapeAmpersand(heading))
+                    {
+                        Enabled = false,
+                    });
+
+                    if (definition.AllowMultiple)
+                    {
+                        AddMultipleChoiceItems(
+                            menu,
+                            prompt,
+                            definition,
+                            options,
+                            numberCandidates,
+                            selected => AdvanceChoice(prompt, definition.Name, selected));
+                    }
+                    else
+                    {
+                        foreach (string option in options)
+                        {
+                            ToolStripMenuItem entry = new(EscapeAmpersand(FormatChoiceOption(option)))
+                            {
+                                // 選んだ場合の完成形を出す。一覧で確認する代わりに、
+                                // 選択肢ごとに結果が見えるようにする
+                                ToolTipText = BuildChoicePreview(prompt, definition.Name, option),
+                            };
+
+                            entry.Click += (_, _) => AdvanceChoice(prompt, definition.Name, option);
+                            menu.Items.Add(entry);
+                            numberCandidates.Add(entry);
+                        }
+                    }
+
+                    if (prompt.Index > 0)
+                    {
+                        menu.Items.Add(new ToolStripSeparator());
+
+                        ToolStripMenuItem back = new("← 戻る");
+                        back.Click += (_, _) => GoBackChoice(prompt);
+                        menu.Items.Add(back);
+                        numberCandidates.Add(back);
+                    }
+
+                    numbered.AddRange(AssignNumberAccessKeys(numberCandidates));
+
+                    // 項目を全部追加したあとに呼ぶこと（Items をたどって配色を配るため）
+                    TrayMenuTheme.Apply(menu);
+                }
+                finally
+                {
+                    menu.ResumeLayout(performLayout: true);
+                }
+            }
+
+            void OnClosed(object? sender, ToolStripDropDownClosedEventArgs e)
+            {
+                menu.Closed -= OnClosed;
+                DisposeMenuLater(menu);
+
+                if (closedByChoice)
+                {
+                    return;
+                }
+
+                // 中止（Esc・別の場所をクリック）。連鎖はここで終わり
+                _choiceChainActive = false;
+                RestoreForeground(initialPrompt.PreviousForeground);
+            }
+
+            menu.Closed += OnClosed;
+
+            try
+            {
+                PopulateChoiceMenu(initialPrompt);
+
+                // 最初の 1 回だけウィンドウを表示する。以降は同じウィンドウの中身を差し替える。
+                _ = ShowMenuAtCursor(
+                    menu,
+                    initialPrompt.FromHotKey,
+                    position: initialPrompt.Origin,
+                    carriedForeground: initialPrompt.PreviousForeground,
+                    restoreForegroundOnClose: false);
+            }
+            catch
+            {
+                menu.Closed -= OnClosed;
+                menu.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// <c>{choices:…}</c> の、いくつでも選べるメニューを組み立てる。
+        ///
+        /// <para>
+        /// 1 つ選ぶごとに閉じてしまっては選べないので、
+        /// <see cref="ToolStripDropDown.Closing"/> で「項目のクリックによる閉じ」を打ち消す。
+        /// 代わりに「決定」を置き、そこで初めて閉じる。
+        /// </para>
+        /// <para>
+        /// 番号キーは <see cref="ToolStripMenuItem.PerformClick"/> を通るため、
+        /// マウスと同じくチェックの反転として効く（<see cref="EnableNumberKeys"/>）。
+        /// </para>
+        /// </summary>
+        /// <param name="accept">「決定」を押したとき、連結した選択結果を呼び出し元へ渡す。</param>
+        /// <param name="options">展開済みの選択肢。表示にも値にもこれを使う。</param>
+        private void AddMultipleChoiceItems(
+            ContextMenuStrip menu,
+            ChoicePrompt prompt,
+            ChoiceDefinition definition,
+            List<string> options,
+            List<ToolStripMenuItem> numbered,
+            Action<string> accept)
+        {
+            // 同じ文字列の選択肢が 2 つ書かれていても取り違えないよう、値ではなく位置で覚える
+            HashSet<int> selectedIndexes = [];
+            List<ToolStripMenuItem> entries = [];
+
+            // 「決定」の見出しに選んだ件数は入れない。
+            // AssignNumberAccessKeys が Text の先頭へ番号を差し込むため、
+            // あとから書き換えると番号ごと消えてしまう。
+            // 件数は、すぐ上に並ぶチェックの数を見れば分かる
+            ToolStripMenuItem commit = new("決定");
+
+            void Refresh()
+            {
+                commit.ToolTipText = BuildMultipleChoiceTip(prompt, definition, options, selectedIndexes);
+
+                // それぞれの選択肢には「いま押したらどうなるか」を出す。
+                // 1 つ押すたびに全部の意味が変わるので、まとめて作り直す
+                for (int i = 0; i < entries.Count; i++)
+                {
+                    HashSet<int> hypothetical = [.. selectedIndexes];
+                    if (!hypothetical.Remove(i))
+                    {
+                        _ = hypothetical.Add(i);
+                    }
+
+                    entries[i].ToolTipText = BuildMultipleChoiceTip(
+                        prompt, definition, options, hypothetical);
+                }
+            }
+
+            for (int i = 0; i < options.Count; i++)
+            {
+                int index = i;
+
+                ToolStripMenuItem entry = new(EscapeAmpersand(FormatChoiceOption(options[i])))
+                {
+                    // 番号キーは PerformClick を通るので、マウスと同じく反転として効く
+                    CheckOnClick = true,
+                };
+
+                entry.Click += (_, _) =>
+                {
+                    // CheckOnClick は Click より先に反転するので、ここで読むのは反転後の状態
+                    if (entry.Checked)
+                    {
+                        _ = selectedIndexes.Add(index);
+                    }
+                    else
+                    {
+                        _ = selectedIndexes.Remove(index);
+                    }
+
+                    Refresh();
+                };
+
+                menu.Items.Add(entry);
+                entries.Add(entry);
+                numbered.Add(entry);
+            }
+
+            menu.Items.Add(new ToolStripSeparator());
+
+            commit.Click += (_, _) =>
+            {
+                accept(TemplateEngine.JoinChoices(options, selectedIndexes));
+            };
+
+            menu.Items.Add(commit);
+            numbered.Add(commit);
+
+            Refresh();
+        }
+
+        /// <summary>
+        /// 複数選択の状態を 1 行で説明する。
+        /// 1 つも選んでいない場合は、選び忘れと「あえて選ばない」を区別できるよう明示する。
+        /// </summary>
+        private string BuildMultipleChoiceTip(
+            ChoicePrompt prompt,
+            ChoiceDefinition definition,
+            List<string> options,
+            HashSet<int> selectedIndexes)
+        {
+            string joined = TemplateEngine.JoinChoices(options, selectedIndexes);
+            string head = selectedIndexes.Count == 0
+                ? "何も選んでいません（この差し込みは空になります）"
+                : $"{selectedIndexes.Count} 件: {TemplateEngine.ToSingleLine(joined, 80)}";
+
+            return head + "\n→ " + BuildChoicePreview(prompt, definition.Name, joined);
+        }
+
+        /// <summary>
+        /// クリックを送ってきた項目を安全に破棄できるよう、現在の入力イベントを抜けてから実行する。
+        /// メニューは閉じないため、待機は通常優先度の 1 回だけでよい。
+        /// </summary>
+        private static void InvokeAfterMenuItemClick(Action action)
+        {
+            System.Windows.Application? app = System.Windows.Application.Current;
+            if (app is null)
+            {
+                action();
+                return;
+            }
+
+            app.Dispatcher.BeginInvoke(DispatcherPriority.Normal, action);
+        }
+
+        /// <summary>
+        /// メニューを閉じる処理の途中では次のメニューを出せないため、
+        /// 入力・フォーカス・閉じる処理が落ち着いてから実行する。
+        ///
+        /// <para>
+        /// 既定の <see cref="DispatcherPriority.Normal"/> で予約すると、元のメニューが
+        /// 遅れて処理するフォーカス変更より先に次のメニューが開く。その直後に元の処理が
+        /// 前面を切り替え、出たばかりの選択肢が <c>AppFocusChange</c> で閉じてしまう。
+        /// <see cref="DispatcherPriority.ContextIdle"/> まで待つことで、元のメニューに属する
+        /// 入力とフォーカス変更を先に処理し終える。
+        /// </para>
+        /// </summary>
+        private static void InvokeAfterMenuClose(Action action)
+        {
+            System.Windows.Application? app = System.Windows.Application.Current;
+            if (app is null)
+            {
+                action();
+                return;
+            }
+
+            app.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, action);
+        }
+
+        /// <summary>閉じる処理の途中で破棄すると例外になるため、戻してから破棄する。</summary>
+        private static void DisposeMenuLater(ContextMenuStrip menu)
+        {
+            System.Windows.Application? app = System.Windows.Application.Current;
+            if (app is null)
+            {
+                menu.Dispose();
+                return;
+            }
+
+            app.Dispatcher.BeginInvoke(new Action(menu.Dispose));
+        }
+
+        /// <summary>
+        /// 選択肢をメニューの 1 行にする。
+        /// 空や空白だけの選択肢はそのまま出すと<strong>押せる行が見えなくなる</strong>ため、
+        /// そうと分かる表示に置き換える（改行やタブは <see cref="TemplateEngine.ToSingleLine"/> が記号にする）。
+        /// </summary>
+        private static string FormatChoiceOption(string option)
+        {
+            if (option.Length == 0)
+            {
+                return "(空)";
+            }
+
+            // 元の文字ではなく「描いたあと」で判定する。
+            // ToSingleLine は改行を ⏎ にする（見える）が、タブは空白 4 つにする（見えない）。
+            // 元の文字で判定すると、この違いを取りこぼす
+            string rendered = TemplateEngine.ToSingleLine(option, MenuTextMaxLength);
+
+            return rendered.All(char.IsWhiteSpace)
+                ? $"(空白 {option.Length} 文字)"
+                : rendered;
+        }
+
+        /// <summary>
+        /// 選択肢に書かれた差し込みを展開する。<strong>メニュー 1 枚につき 1 回だけ</strong>呼ぶ。
+        ///
+        /// <para>
+        /// 時刻は全部の選択肢で同じ値を使う。1 つずつ <c>DateTime.Now</c> を読むと、
+        /// <c>{time:HH:mm:ss}</c> を並べたときに選択肢どうしで秒がずれることがある。
+        /// </para>
+        /// </summary>
+        private List<string> ResolveChoiceOptions(ChoicePrompt prompt, ChoiceDefinition definition)
+        {
+            DateTime now = DateTime.Now;
+            ExpandValues values = new()
+            {
+                Clipboard = prompt.Clipboard,
+                Sprint = _settings.Sprint,
+                Matches = prompt.Captures,
+            };
+
+            List<string> resolved = new(definition.Options.Count);
+            foreach (string option in definition.Options)
+            {
+                resolved.Add(TemplateEngine.ResolveChoiceOption(
+                    option, now, prompt.Item.SequenceValue, values));
+            }
+
+            return resolved;
+        }
+
+        /// <summary>
+        /// その選択肢を選んだ場合の完成形。ここまでに選んだものも反映する。
+        /// まだ選んでいない選択肢は、書いたままの文字列として残る。
+        /// </summary>
+        private string BuildChoicePreview(ChoicePrompt prompt, string name, string option)
+        {
+            Dictionary<string, string> selected = new(prompt.Selected, StringComparer.OrdinalIgnoreCase)
+            {
+                [name] = option,
+            };
+
+            string expanded = TemplateEngine.Expand(
+                prompt.Item.Text,
+                DateTime.Now,
+                prompt.Item.SequenceValue,
+                new ExpandValues
+                {
+                    Clipboard = prompt.Clipboard,
+                    Sprint = _settings.Sprint,
+                    Matches = prompt.Captures,
+                    Choices = selected,
+                });
+
+            return TemplateEngine.ToSingleLine(expanded, 200);
+        }
+
         private static void ShowCapturePrompt(ClipboardCaptureProgress progress, string title)
         {
             string condition = progress.Patterns.Count == 0
@@ -1602,7 +2446,8 @@ namespace MyTaskTray
             ClipItem item,
             Func<string> clipboardReader,
             IReadOnlyDictionary<string, string>? inputs,
-            IReadOnlyDictionary<string, string> captures)
+            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyDictionary<string, string>? choices)
         {
             // クリップボードを開くと他アプリのコピー操作を妨げるうえ、ロックされていると
             // 再試行のあいだ操作が止まる。{clip} を使う項目でだけ読みに行く。
@@ -1637,15 +2482,19 @@ namespace MyTaskTray
                 item.Text,
                 DateTime.Now,
                 item.SequenceValue,
-                () => clipboard,
-                _settings.Sprint,
-                inputs,
-                captures,
+                new ExpandValues
+                {
+                    Clipboard = () => clipboard,
+                    Sprint = _settings.Sprint,
+                    Inputs = inputs,
+                    Matches = captures,
+                    Choices = choices,
 
-                // HTML の項目では、差し込まれた値だけをエスケープする。
-                // 利用者が書いたタグは生かしたまま、{input:…} に入った & や < が
-                // 壊れた HTML にならないようにするため
-                ClipboardService.GetValueTransform(item.Format));
+                    // HTML の項目では、差し込まれた値だけをエスケープする。
+                    // 利用者が書いたタグは生かしたまま、{input:…} や {choice:…} に入った
+                    // & や < が壊れた HTML にならないようにするため
+                    ValueTransform = ClipboardService.GetValueTransform(item.Format),
+                });
 
             if (!ClipboardService.TryCopy(value, item.Format))
             {
