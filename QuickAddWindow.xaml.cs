@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using MyTaskTray.Models;
 using MyTaskTray.Services;
 
 namespace MyTaskTray
@@ -24,7 +25,7 @@ namespace MyTaskTray
         /// <param name="text">登録される文字列（波かっこのエスケープ前）。</param>
         /// <param name="escaped">波かっこをエスケープしたかどうか。した場合は理由を添える。</param>
         public QuickAddWindow(string text, bool escaped)
-            : this(text, escaped, [], string.Empty)
+            : this(text, escaped, Array.Empty<ClipCategory>(), string.Empty)
         {
         }
 
@@ -33,6 +34,19 @@ namespace MyTaskTray
             bool escaped,
             IReadOnlyList<string> categories,
             string initialCategory)
+            : this(
+                text,
+                escaped,
+                categories.Select(category => new ClipCategory { Name = category }).ToArray(),
+                initialCategory)
+        {
+        }
+
+        public QuickAddWindow(
+            string text,
+            bool escaped,
+            IReadOnlyList<ClipCategory> categories,
+            string initialCategory)
         {
             InitializeComponent();
 
@@ -40,10 +54,10 @@ namespace MyTaskTray
             NameBox.Text = ItemName;
             PreviewText.Text = TemplateEngine.ToSingleLine(text, 300);
             CategoryList.ItemsSource = categories
-                .Select(category => category.Trim())
-                .Where(category => category.Length > 0)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(category => category, StringComparer.CurrentCulture)
+                .Where(category => category.Name.Trim().Length > 0)
+                .GroupBy(category => category.Name.Trim(), StringComparer.Ordinal)
+                .Select(group => group.First().Clone())
+                .OrderBy(category => category.Name, StringComparer.CurrentCulture)
                 .ToArray();
             CategoryBox.Text = initialCategory.Trim();
 
@@ -156,13 +170,13 @@ namespace MyTaskTray
 
         private void OnPickCategory(object sender, RoutedEventArgs e)
         {
-            if (sender is not Button { DataContext: string category })
+            if (sender is not Button { DataContext: ClipCategory category })
             {
                 return;
             }
 
             CategoryPopup.IsOpen = false;
-            CategoryBox.Text = category;
+            CategoryBox.Text = category.Name;
             CategoryBox.Focus();
             CategoryBox.CaretIndex = CategoryBox.Text.Length;
         }

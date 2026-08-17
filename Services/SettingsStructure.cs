@@ -124,6 +124,8 @@ namespace MyTaskTray.Services
             {
                 string oldId = category.Id?.Trim() ?? string.Empty;
                 string name = category.Name?.Trim() ?? string.Empty;
+                string color = CategoryAppearanceCatalog.NormalizeColor(category.Color);
+                string icon = CategoryAppearanceCatalog.NormalizeIcon(category.Icon);
                 if (name.Length == 0)
                 {
                     changed = true;
@@ -149,7 +151,13 @@ namespace MyTaskTray.Services
                     changed = true;
                 }
 
-                ClipCategory clean = new() { Id = id, Name = name };
+                ClipCategory clean = new()
+                {
+                    Id = id,
+                    Name = name,
+                    Color = color,
+                    Icon = icon,
+                };
                 normalized.Add(clean);
                 byId[id] = clean;
                 byName[name] = clean;
@@ -159,7 +167,9 @@ namespace MyTaskTray.Services
                 }
 
                 changed |= !string.Equals(category.Id, id, StringComparison.Ordinal)
-                    || !string.Equals(category.Name, name, StringComparison.Ordinal);
+                    || !string.Equals(category.Name, name, StringComparison.Ordinal)
+                    || !string.Equals(category.Color, color, StringComparison.Ordinal)
+                    || !string.Equals(category.Icon, icon, StringComparison.Ordinal);
             }
 
             foreach (ClipItem item in settings.Items)
@@ -361,7 +371,9 @@ namespace MyTaskTray.Services
             => left.Count == right.Count
                 && left.Zip(right).All(pair => pair.First is not null
                     && string.Equals(pair.First.Id, pair.Second.Id, StringComparison.Ordinal)
-                    && string.Equals(pair.First.Name, pair.Second.Name, StringComparison.Ordinal));
+                    && string.Equals(pair.First.Name, pair.Second.Name, StringComparison.Ordinal)
+                    && string.Equals(pair.First.Color, pair.Second.Color, StringComparison.Ordinal)
+                    && string.Equals(pair.First.Icon, pair.Second.Icon, StringComparison.Ordinal));
 
         private static bool LayoutEquals(
             IReadOnlyList<MenuLayoutNode> left,

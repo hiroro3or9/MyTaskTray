@@ -98,7 +98,8 @@ namespace MyTaskTray
         public bool Saved { get; private set; }
 
         /// <summary>クイック追加の「追加先」に、未保存のカテゴリも含めて渡す。</summary>
-        internal IReadOnlyList<string> GetKnownCategories() => [.. _vm.KnownCategories];
+        internal IReadOnlyList<ClipCategory> GetKnownCategories()
+            => [.. _vm.KnownCategories.Select(category => category.Clone())];
 
         /// <summary>最新の前面アプリを app 系差し込みのプレビューへ反映する。</summary>
         internal void NotifyAppContext(ForegroundApp appContext)
@@ -651,16 +652,19 @@ namespace MyTaskTray
 
         private void OnPickCategory(object sender, RoutedEventArgs e)
         {
-            if (sender is not Button { DataContext: string category } || _vm.SelectedItem is null)
+            if (sender is not Button { DataContext: ClipCategory category } || _vm.SelectedItem is null)
             {
                 return;
             }
 
             CategoryPopup.IsOpen = false;
-            _vm.SelectedItem.Category = category;
+            _vm.SelectedItem.Category = category.Name;
             CategoryBox.Focus();
             CategoryBox.CaretIndex = CategoryBox.Text.Length;
         }
+
+        private void OnResetCategoryAppearance(object sender, RoutedEventArgs e)
+            => _vm.ResetSelectedCategoryAppearance();
 
         private void OnClearCategory(object sender, RoutedEventArgs e)
         {

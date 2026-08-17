@@ -105,6 +105,11 @@ JSON の入力ではコメントと末尾カンマも受け付けますが、出
 項目編集欄の「配置先」へ新しい名前を直接入力すると、新しいカテゴリを作れます。
 右の「▾」から既存カテゴリまたはトップレベルを選ぶこともできます。
 
+カテゴリ見出しを選ぶと、識別しやすいプリセット色とアイコンを設定できます。
+装飾は設定画面の見出し・配置先候補・クイック追加候補と、実際のトレイメニューへ共通して表示されます。
+色だけなら小さな色印、アイコンも選ぶとその色のアイコンとして表示されます。
+「装飾をリセット」で色・アイコンをまとめて外せます。
+
 カテゴリには表示名とは別の固定IDがあり、名前を変えても所属と並び順は保たれます。
 通常メニューと「この内容でできること」はそれぞれ独立した配置順を持つため、
 同じカテゴリを両方で使っても、各領域で好きな位置へ並べられます。
@@ -859,7 +864,7 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 
 ```json
 {
-  "Version": 2,
+  "Version": 3,
   "ShowCopyNotification": true,
   "MenuHotKey": "Ctrl+Alt+V",
   "ActionStates": {
@@ -871,7 +876,12 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
   "SprintAnchorDate": "2026-04-06T00:00:00",
   "SprintLengthDays": 14,
   "Categories": [
-    { "Id": "category-date", "Name": "日付" }
+    {
+      "Id": "category-date",
+      "Name": "日付",
+      "Color": "#4F8EF7",
+      "Icon": "calendar"
+    }
   ],
   "RegularMenu": [
     {
@@ -933,7 +943,7 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 | `ActionStates` | 組み込みアクションの ID と表示状態。記載がないアクションは、そのアクションの既定値を使う |
 | `SprintAnchorDate` | スプリントの基準日。`null` なら `@sprint` を使った差し込みは展開されない |
 | `SprintLengthDays` | スプリント 1 つの日数（既定は `14`） |
-| `Categories` | カテゴリ定義。`Id` は固定ID、`Name` は画面とメニューに出す名前 |
+| `Categories` | カテゴリ定義。`Id` は固定ID、`Name` は表示名、`Color` はアクセント色、`Icon` はプリセットキー |
 | `RegularMenu` | 通常メニュー直下の項目・カテゴリ順。カテゴリの `Children` は配下の項目ID順 |
 | `ContextualMenu` | 「この内容でできること」内の項目・カテゴリ順 |
 | `Id` | 項目の識別子（自動生成。連番の引き継ぎに使用） |
@@ -959,7 +969,8 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 メニューから「設定...」を選ぶと読み直しを試みるので、しばらく待ってからもう一度お試しください。
 
 `Id` を書かずに項目を足した場合は、次回の読み込み時に自動で採番して書き戻します。
-Version 1 のように `Category` だけを持つ旧設定も、カテゴリIDと配置へ自動移行して書き戻します。
+Version 1 のように `Category` だけを持つ旧設定や、装飾を持たないVersion 2も、
+カテゴリID・配置・Version 3の構造へ自動移行して書き戻します。
 
 ## 仕様メモ
 

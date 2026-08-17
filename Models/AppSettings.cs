@@ -8,7 +8,7 @@ namespace MyTaskTray.Models
     /// </summary>
     public class AppSettings
     {
-        public const int CurrentVersion = 2;
+        public const int CurrentVersion = 3;
 
         /// <summary>
         /// 設定ファイルを読めず、既定値で代用しているかどうか。

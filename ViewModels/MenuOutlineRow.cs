@@ -28,6 +28,8 @@ namespace MyTaskTray.ViewModels
             MenuOutlineSection section,
             string categoryId,
             string category,
+            string categoryColor,
+            string categoryIcon,
             ClipItem? item,
             int itemCount,
             bool isExpanded)
@@ -36,6 +38,8 @@ namespace MyTaskTray.ViewModels
             Section = section;
             CategoryId = categoryId;
             Category = category;
+            CategoryColor = CategoryAppearanceCatalog.NormalizeColor(categoryColor);
+            CategoryIcon = CategoryAppearanceCatalog.NormalizeIcon(categoryIcon);
             Item = item;
             ItemCount = itemCount;
             IsExpanded = isExpanded;
@@ -48,6 +52,22 @@ namespace MyTaskTray.ViewModels
         public string CategoryId { get; }
 
         public string Category { get; }
+
+        public string CategoryColor { get; }
+
+        public string CategoryIcon { get; }
+
+        public bool HasCategoryColor => CategoryColor.Length > 0;
+
+        public bool HasCategoryIcon => CategoryAppearanceCatalog.FindIcon(CategoryIcon) is not null;
+
+        public string CategoryColorBrush => HasCategoryColor ? CategoryColor : "Transparent";
+
+        public string CategoryIconBrush => HasCategoryColor ? CategoryColor : "#808080";
+
+        public string CategoryIconGlyph => CategoryAppearanceCatalog.GetIconGlyph(CategoryIcon);
+
+        public string CategoryIconFontFamily => CategoryAppearanceCatalog.IconFontFamily;
 
         public ClipItem? Item { get; }
 
@@ -76,21 +96,47 @@ namespace MyTaskTray.ViewModels
         public string ExpandGlyph => IsExpanded ? "▾" : "▸";
 
         public static MenuOutlineRow CreateSection(MenuOutlineSection section)
-            => new(MenuOutlineRowKind.Section, section, string.Empty, string.Empty, null, 0, true);
+            => new(
+                MenuOutlineRowKind.Section,
+                section,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                0,
+                true);
 
         public static MenuOutlineRow CreateCategory(
             MenuOutlineSection section,
-            string categoryId,
-            string category,
+            ClipCategory category,
             int itemCount,
             bool isExpanded)
-            => new(MenuOutlineRowKind.Category, section, categoryId, category, null, itemCount, isExpanded);
+            => new(
+                MenuOutlineRowKind.Category,
+                section,
+                category.Id,
+                category.Name,
+                category.Color,
+                category.Icon,
+                null,
+                itemCount,
+                isExpanded);
 
         public static MenuOutlineRow CreateItem(
             MenuOutlineSection section,
             ClipItem item,
             string categoryId,
             string category)
-            => new(MenuOutlineRowKind.Item, section, categoryId, category, item, 0, true);
+            => new(
+                MenuOutlineRowKind.Item,
+                section,
+                categoryId,
+                category,
+                string.Empty,
+                string.Empty,
+                item,
+                0,
+                true);
     }
 }

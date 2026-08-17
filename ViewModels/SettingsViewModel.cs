@@ -240,7 +240,13 @@ namespace MyTaskTray.ViewModels
         public ObservableCollection<MenuOutlineRow> MenuOutline { get; }
 
         /// <summary>カテゴリ入力欄の候補。</summary>
-        public ObservableCollection<string> KnownCategories { get; }
+        public ObservableCollection<ClipCategory> KnownCategories { get; }
+
+        public IReadOnlyList<CategoryColorPreset> CategoryColorOptions
+            => CategoryAppearanceCatalog.Colors;
+
+        public IReadOnlyList<CategoryIconPreset> CategoryIconOptions
+            => CategoryAppearanceCatalog.Icons;
 
         /// <summary>
         /// 「現在のアプリ ▾」に出す候補。トレイメニューを開いたときに前面だったアプリを
@@ -615,6 +621,9 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(EditorHint));
                 OnPropertyChanged(nameof(SelectedCategoryItemCount));
                 OnPropertyChanged(nameof(SelectedCategoryLocation));
+                OnPropertyChanged(nameof(SelectedCategoryColor));
+                OnPropertyChanged(nameof(SelectedCategoryIcon));
+                OnPropertyChanged(nameof(HasSelectedCategoryAppearance));
             }
         }
 
@@ -670,6 +679,81 @@ namespace MyTaskTray.ViewModels
                     ? "通常メニューに表示されるカテゴリです。"
                     : "条件に合うとき「この内容でできること」の中に表示されます。"
                 : string.Empty;
+
+        public string SelectedCategoryColor
+        {
+            get => SelectedOutlineRow is { IsCategory: true } row
+                ? FindCategoryById(row.CategoryId)?.Color ?? string.Empty
+                : string.Empty;
+            set
+            {
+                if (value is null || SelectedOutlineRow is not { IsCategory: true } row)
+                {
+                    return;
+                }
+
+                ClipCategory? category = FindCategoryById(row.CategoryId);
+                string normalized = CategoryAppearanceCatalog.NormalizeColor(value);
+                if (category is null || string.Equals(category.Color, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                category.Color = normalized;
+                CategoryAppearanceChanged();
+            }
+        }
+
+        public string SelectedCategoryIcon
+        {
+            get => SelectedOutlineRow is { IsCategory: true } row
+                ? FindCategoryById(row.CategoryId)?.Icon ?? string.Empty
+                : string.Empty;
+            set
+            {
+                if (value is null || SelectedOutlineRow is not { IsCategory: true } row)
+                {
+                    return;
+                }
+
+                ClipCategory? category = FindCategoryById(row.CategoryId);
+                string normalized = CategoryAppearanceCatalog.NormalizeIcon(value);
+                if (category is null || string.Equals(category.Icon, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                category.Icon = normalized;
+                CategoryAppearanceChanged();
+            }
+        }
+
+        public bool HasSelectedCategoryAppearance
+            => SelectedCategoryColor.Length > 0 || SelectedCategoryIcon.Length > 0;
+
+        public void ResetSelectedCategoryAppearance()
+        {
+            if (SelectedOutlineRow is not { IsCategory: true } row
+                || FindCategoryById(row.CategoryId) is not { } category
+                || (category.Color.Length == 0 && category.Icon.Length == 0))
+            {
+                return;
+            }
+
+            category.Color = string.Empty;
+            category.Icon = string.Empty;
+            CategoryAppearanceChanged();
+        }
+
+        private void CategoryAppearanceChanged()
+        {
+            IsDirty = true;
+            RefreshCategories();
+            RebuildMenuOutline();
+            OnPropertyChanged(nameof(SelectedCategoryColor));
+            OnPropertyChanged(nameof(SelectedCategoryIcon));
+            OnPropertyChanged(nameof(HasSelectedCategoryAppearance));
+        }
 
         /// <summary>選択項目が連番を使っているときだけ、連番の設定欄を出す。</summary>
         public bool IsSequenceVisible => IsItemEditable && SelectedItem!.UsesSequence;
@@ -1037,16 +1121,16 @@ namespace MyTaskTray.ViewModels
         /// <summary>既存項目のカテゴリを重複なく集めて候補を作り直す。</summary>
         public void RefreshCategories()
         {
-            List<string> categories = [.. _categories
+            List<ClipCategory> categories = [.. _categories
                 .Where(category => Items.Any(item => string.Equals(
                     item.CategoryId,
                     category.Id,
                     StringComparison.Ordinal)))
-                .Select(category => category.Name)
-                .OrderBy(name => name, StringComparer.CurrentCulture)];
+                .OrderBy(category => category.Name, StringComparer.CurrentCulture)
+                .Select(category => category.Clone())];
 
             KnownCategories.Clear();
-            foreach (string category in categories)
+            foreach (ClipCategory category in categories)
             {
                 KnownCategories.Add(category);
             }
@@ -1508,6 +1592,9 @@ namespace MyTaskTray.ViewModels
             OnPropertyChanged(nameof(ShowEditorHint));
             OnPropertyChanged(nameof(EditorHint));
             OnPropertyChanged(nameof(SelectedCategoryItemCount));
+            OnPropertyChanged(nameof(SelectedCategoryColor));
+            OnPropertyChanged(nameof(SelectedCategoryIcon));
+            OnPropertyChanged(nameof(HasSelectedCategoryAppearance));
         }
 
         private void AddSectionRows(MenuOutlineSection section)
@@ -1543,8 +1630,11 @@ namespace MyTaskTray.ViewModels
                     continue;
                 }
 
-                string category = FindCategoryById(categoryId)?.Name
-                    ?? NormalizeCategory(item.Category);
+                ClipCategory category = FindCategoryById(categoryId) ?? new ClipCategory
+                {
+                    Id = categoryId,
+                    Name = NormalizeCategory(item.Category),
+                };
                 List<ClipItem> children = [.. sectionItems
                     .Where(candidate => string.Equals(
                         candidate.CategoryId,
@@ -1553,7 +1643,6 @@ namespace MyTaskTray.ViewModels
                 bool expanded = HasFilter || !_collapsedCategories.Contains((section, categoryId));
                 MenuOutline.Add(MenuOutlineRow.CreateCategory(
                     section,
-                    categoryId,
                     category,
                     children.Count,
                     expanded));
@@ -1569,7 +1658,7 @@ namespace MyTaskTray.ViewModels
                         section,
                         child,
                         categoryId,
-                        category));
+                        category.Name));
                 }
             }
         }

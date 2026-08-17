@@ -15,6 +15,52 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <local:NotBoolToVisibilityConverter x:Key="NotBoolToVis" />
 
+        <Style x:Key="CategoryPalette" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ItemsPanel">
+                <Setter.Value>
+                    <ItemsPanelTemplate>
+                        <WrapPanel />
+                    </ItemsPanelTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CategoryPaletteItem" TargetType="ListBoxItem">
+            <Setter Property="Margin" Value="0,0,5,5" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Tile" CornerRadius="5" BorderThickness="1"
+                                BorderBrush="{DynamicResource Brush.Border}"
+                                Background="Transparent">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Tile" Property="Background"
+                                        Value="{DynamicResource Brush.Hover}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Tile" Property="BorderBrush"
+                                        Value="{DynamicResource Brush.Accent}" />
+                                <Setter TargetName="Tile" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="Tile" Property="Background"
+                                        Value="{DynamicResource Brush.Selected}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 一覧の 1 行。通常項目は 2 行表示、区切り線は線として描く -->
         <DataTemplate x:Key="ClipItemTemplate">
             <Grid>
@@ -96,18 +142,30 @@
                 <Grid Margin="2,2,0,2"
                       Visibility="{Binding IsCategory, Converter={StaticResource BoolToVis}}">
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4" />
                         <ColumnDefinition Width="24" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Content="{Binding ExpandGlyph}" Width="22" Height="22"
+                    <Border Grid.Column="0" Width="3" Height="22" CornerRadius="2"
+                            HorizontalAlignment="Left"
+                            Background="{Binding CategoryColorBrush}" />
+                    <Button Grid.Column="1" Content="{Binding ExpandGlyph}" Width="22" Height="22"
                             MinHeight="0" Padding="0" Style="{StaticResource SubtleButton}"
                             ToolTip="カテゴリを折りたたむ / 展開する"
                             Click="OnToggleCategory" />
-                    <TextBlock Grid.Column="1" Text="{Binding Category}" Margin="5,0,8,0"
+                    <Grid Grid.Column="2" Width="22" Height="22" Margin="3,0,1,0"
+                          Visibility="{Binding HasCategoryIcon, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding CategoryIconGlyph}"
+                                   FontFamily="{Binding CategoryIconFontFamily}" FontSize="14"
+                                   Foreground="{Binding CategoryIconBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Grid.Column="3" Text="{Binding Category}" Margin="5,0,8,0"
                                VerticalAlignment="Center" FontWeight="SemiBold"
                                TextTrimming="CharacterEllipsis" />
-                    <Border Grid.Column="2" Style="{StaticResource Badge}" VerticalAlignment="Center">
+                    <Border Grid.Column="4" Style="{StaticResource Badge}" VerticalAlignment="Center">
                         <TextBlock Text="{Binding ItemCountText}" Style="{StaticResource BadgeText}" />
                     </Border>
                 </Grid>
@@ -249,6 +307,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
 
@@ -270,7 +329,65 @@
                             </Grid>
                         </StackPanel>
 
-                        <Border Grid.Row="2" Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
+                        <StackPanel Grid.Row="2" Margin="0,14,0,0">
+                            <Grid>
+                                <TextBlock Text="色" Style="{StaticResource FieldLabel}" />
+                                <Button HorizontalAlignment="Right" Content="装飾をリセット"
+                                        Padding="8,2" MinHeight="24" Style="{StaticResource SubtleButton}"
+                                        IsEnabled="{Binding HasSelectedCategoryAppearance}"
+                                        Click="OnResetCategoryAppearance" />
+                            </Grid>
+                            <ListBox Style="{StaticResource CategoryPalette}"
+                                     ItemContainerStyle="{StaticResource CategoryPaletteItem}"
+                                     ItemsSource="{Binding CategoryColorOptions}"
+                                     SelectedValuePath="Value"
+                                     SelectedValue="{Binding SelectedCategoryColor, Mode=TwoWay}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Width="30" Height="30" ToolTip="{Binding Name}">
+                                            <Ellipse Width="16" Height="16" Fill="{Binding Brush}"
+                                                     Stroke="{DynamicResource Brush.Border.Strong}"
+                                                     StrokeThickness="1" />
+                                            <TextBlock Text="—" Foreground="{DynamicResource Brush.Text}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" FontSize="13">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasValue}" Value="False">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <TextBlock Text="アイコン" Margin="0,4,0,0"
+                                       Style="{StaticResource FieldLabel}" />
+                            <ListBox Style="{StaticResource CategoryPalette}"
+                                     ItemContainerStyle="{StaticResource CategoryPaletteItem}"
+                                     ItemsSource="{Binding CategoryIconOptions}"
+                                     SelectedValuePath="Value"
+                                     SelectedValue="{Binding SelectedCategoryIcon, Mode=TwoWay}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Width="30" Height="30" ToolTip="{Binding Name}">
+                                            <TextBlock Text="{Binding Glyph}" FontFamily="{Binding FontFamily}"
+                                                       Foreground="{DynamicResource Brush.Text}"
+                                                       FontSize="15" HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+
+                        <Border Grid.Row="3" Margin="0,9,0,0" Padding="12,10" CornerRadius="6"
                                 Background="{DynamicResource Brush.Surface.Alt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                             <StackPanel>
@@ -283,7 +400,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Button Grid.Row="3" Content="カテゴリを削除…" HorizontalAlignment="Left"
+                        <Button Grid.Row="4" Content="カテゴリを削除…" HorizontalAlignment="Left"
                                 Margin="0,14,0,0" Padding="12,4" Click="OnRemoveCategory"
                                 ToolTip="中の項目は削除せず、トップレベルへ移します" />
                     </Grid>
@@ -703,7 +820,27 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Style="{StaticResource RowButton}" Click="OnPickCategory"
-                                            Content="{Binding}" HorizontalContentAlignment="Left" />
+                                            HorizontalContentAlignment="Left">
+                                        <Grid Width="220">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="18" />
+                                                <ColumnDefinition Width="22" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Ellipse Grid.Column="0" Width="9" Height="9"
+                                                     Fill="{Binding ColorBrush}"
+                                                     Stroke="{DynamicResource Brush.Border.Strong}"
+                                                     StrokeThickness="0.7"
+                                                     Visibility="{Binding HasColor, Converter={StaticResource BoolToVis}}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding IconGlyph}"
+                                                       FontFamily="{Binding IconFontFamily}" FontSize="13"
+                                                       Foreground="{Binding IconBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       Visibility="{Binding HasIcon, Converter={StaticResource BoolToVis}}" />
+                                            <TextBlock Grid.Column="2" Text="{Binding Name}" Margin="4,0,0,0"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Button>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

@@ -752,6 +752,7 @@ namespace MyTaskTray
         private void PopulateMenu(ContextMenuStrip menu)
         {
             ClearAndDispose(menu.Items);
+            menu.ShowImageMargin = false;
 
             Func<string> clipboard = CreateClipboardReader();
 
@@ -1407,12 +1408,13 @@ namespace MyTaskTray
                         enabled);
 
                 string categoryId = item.CategoryId.Trim();
-                string category = categoryId.Length > 0
+                ClipCategory? categoryDefinition = categoryId.Length > 0
                     ? _settings.Categories.FirstOrDefault(candidate => string.Equals(
                         candidate.Id,
                         categoryId,
-                        StringComparison.Ordinal))?.Name ?? item.Category.Trim()
-                    : item.Category.Trim();
+                        StringComparison.Ordinal))
+                    : null;
+                string category = categoryDefinition?.Name ?? item.Category.Trim();
                 string categoryKey = categoryId.Length > 0 ? categoryId : category;
 
                 if (string.IsNullOrEmpty(category))
@@ -1440,8 +1442,20 @@ namespace MyTaskTray
                         dropDownMenu.ShowImageMargin = false;
                     }
 
+                    Image? decoration = CreateCategoryMenuImage(categoryDefinition);
+                    if (decoration is not null)
+                    {
+                        parent.Image = decoration;
+                        parent.ImageScaling = ToolStripItemImageScaling.SizeToFit;
+                        parent.Disposed += (_, _) => decoration.Dispose();
+                    }
+
                     categories[categoryKey] = parent;
                     target.Add(parent);
+                    if (decoration is not null && parent.Owner is ToolStripDropDownMenu owner)
+                    {
+                        owner.ShowImageMargin = true;
+                    }
                     numbered.Add(parent);
                 }
 
@@ -1464,6 +1478,57 @@ namespace MyTaskTray
 
             // 中身が空でサブメニューが無効になった場合は番号を飛ばしたいので、上の整理のあとに振る
             EnableNumberKeys(AssignNumberAccessKeys(numbered));
+        }
+
+        /// <summary>カテゴリの色・アイコンを、WinForms メニュー用の小さな画像へ描画する。</summary>
+        private static Bitmap? CreateCategoryMenuImage(ClipCategory? category)
+        {
+            if (category is null)
+            {
+                return null;
+            }
+
+            string colorValue = CategoryAppearanceCatalog.NormalizeColor(category.Color);
+            string glyph = CategoryAppearanceCatalog.GetIconGlyph(category.Icon);
+            if (colorValue.Length == 0 && glyph.Length == 0)
+            {
+                return null;
+            }
+
+            Color color = colorValue.Length > 0
+                ? Color.FromArgb(
+                    Convert.ToByte(colorValue.Substring(1, 2), 16),
+                    Convert.ToByte(colorValue.Substring(3, 2), 16),
+                    Convert.ToByte(colorValue.Substring(5, 2), 16))
+                : ThemeManager.IsDark
+                    ? ThemeManager.TrayMenuColors.Text
+                    : System.Drawing.SystemColors.MenuText;
+            Bitmap bitmap = new(16, 16, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using Graphics graphics = Graphics.FromImage(bitmap);
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            if (glyph.Length == 0)
+            {
+                using SolidBrush dotBrush = new(color);
+                graphics.FillEllipse(dotBrush, 4, 4, 8, 8);
+                return bitmap;
+            }
+
+            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            using SolidBrush iconBrush = new(color);
+            using System.Drawing.Font iconFont = new(
+                CategoryAppearanceCatalog.IconFontFamily,
+                12,
+                System.Drawing.FontStyle.Regular,
+                GraphicsUnit.Pixel);
+            using StringFormat format = new()
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+                FormatFlags = StringFormatFlags.NoWrap,
+            };
+            graphics.DrawString(glyph, iconFont, iconBrush, new RectangleF(0, 0, 16, 16), format);
+            return bitmap;
         }
 
         /// <summary>
@@ -2699,11 +2764,14 @@ namespace MyTaskTray
                 return;
             }
 
-            IReadOnlyList<string> categories = _settingsWindow?.GetKnownCategories()
+            IReadOnlyList<ClipCategory> categories = _settingsWindow?.GetKnownCategories()
                 ?? [.. _settings.Categories
-                    .Select(category => category.Name)
-                    .OrderBy(category => category, StringComparer.CurrentCulture)];
-            string initialCategory = categories.Contains(_lastQuickAddCategory, StringComparer.Ordinal)
+                    .OrderBy(category => category.Name, StringComparer.CurrentCulture)
+                    .Select(category => category.Clone())];
+            string initialCategory = categories.Any(category => string.Equals(
+                category.Name,
+                _lastQuickAddCategory,
+                StringComparison.Ordinal))
                 ? _lastQuickAddCategory
                 : string.Empty;
 

@@ -53,7 +53,45 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Style="{StaticResource RowButton}" Click="OnPickCategory"
-                                                Content="{Binding}" HorizontalContentAlignment="Left" />
+                                                HorizontalContentAlignment="Left">
+                                            <Grid Width="240">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="18" />
+                                                    <ColumnDefinition Width="22" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Ellipse Grid.Column="0" Width="9" Height="9"
+                                                         Fill="{Binding ColorBrush}"
+                                                         Stroke="{DynamicResource Brush.Border.Strong}"
+                                                         StrokeThickness="0.7">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasColor}" Value="False">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                                <TextBlock Grid.Column="1" Text="{Binding IconGlyph}"
+                                                           FontFamily="{Binding IconFontFamily}" FontSize="13"
+                                                           Foreground="{Binding IconBrush}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasIcon}" Value="False">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="2" Text="{Binding Name}" Margin="4,0,0,0"
+                                                           VerticalAlignment="Center" />
+                                            </Grid>
+                                        </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
