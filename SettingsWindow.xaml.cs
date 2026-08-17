@@ -26,7 +26,7 @@ namespace MyTaskTray
 
         private Point _dragStartPoint;
         private bool _dragArmed;
-        private ClipItem? _draggingItem;
+        private MenuOutlineRow? _draggingRow;
 
         // 挿入線を出している行。仮想化でコンテナが消えたり再利用されたりするため、
         // 一覧全体を走査するのではなく「いま線を出している 1 行」だけを覚えておく。
@@ -97,6 +97,9 @@ namespace MyTaskTray
         /// <summary>保存して閉じた場合に true。</summary>
         public bool Saved { get; private set; }
 
+        /// <summary>クイック追加の「追加先」に、未保存のカテゴリも含めて渡す。</summary>
+        internal IReadOnlyList<string> GetKnownCategories() => [.. _vm.KnownCategories];
+
         /// <summary>最新の前面アプリを app 系差し込みのプレビューへ反映する。</summary>
         internal void NotifyAppContext(ForegroundApp appContext)
             => _vm.UpdateAppContext(appContext);
@@ -121,7 +124,7 @@ namespace MyTaskTray
             ClearFilter();
             _vm.Items.Add(item);
             _vm.SelectedItem = item;
-            ItemsList.ScrollIntoView(item);
+            ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
             _vm.RefreshCategories();
         }
 
@@ -170,11 +173,15 @@ namespace MyTaskTray
 
         private void OnAddItem(object sender, RoutedEventArgs e)
         {
+            MenuOutlineRow? location = _vm.SelectedOutlineRow;
             ClipItem item = new()
             {
                 Name = "新しい項目",
                 Text = string.Empty,
-                Category = _vm.SelectedItem?.Category ?? string.Empty,
+                Category = location?.Category ?? _vm.SelectedItem?.Category ?? string.Empty,
+                ClipboardCondition = location?.Section == MenuOutlineSection.Contextual
+                    ? ClipboardMatchKind.HasText
+                    : ClipboardMatchKind.Always,
             };
 
             ClearFilter();
@@ -216,6 +223,12 @@ namespace MyTaskTray
 
         private void OnDeleteItem(object sender, RoutedEventArgs e)
         {
+            if (_vm.SelectedOutlineRow is { IsCategory: true })
+            {
+                OnRemoveCategory(sender, e);
+                return;
+            }
+
             if (_vm.SelectedItem is not ClipItem target)
             {
                 return;
@@ -252,35 +265,49 @@ namespace MyTaskTray
 
         private void Move(int offset)
         {
-            if (!_vm.CanReorder || _vm.SelectedItem is null)
+            if (!_vm.CanReorder)
             {
                 return;
             }
 
-            ClipItem moving = _vm.SelectedItem;
-            int index = _vm.Items.IndexOf(moving);
-            int target = index + offset;
-            if (target < 0 || target >= _vm.Items.Count)
-            {
-                return;
-            }
-
-            _vm.Items.Move(index, target);
-
-            // ListBox は Move で選択が外れることがあるため、選択し直す
-            _vm.SelectedItem = moving;
-            ItemsList.ScrollIntoView(moving);
+            _vm.MoveSelectedOutline(offset);
+            ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
         }
 
         private void InsertAfterSelection(ClipItem item)
         {
-            int index = _vm.SelectedItem is null
-                ? _vm.Items.Count
-                : _vm.Items.IndexOf(_vm.SelectedItem) + 1;
+            int index;
+            if (_vm.SelectedOutlineRow is { IsCategory: true } category)
+            {
+                int last = -1;
+                for (int i = 0; i < _vm.Items.Count; i++)
+                {
+                    ClipItem candidate = _vm.Items[i];
+                    bool sameSection = category.Section == MenuOutlineSection.Regular
+                        ? candidate.IsSeparator || candidate.ClipboardCondition == ClipboardMatchKind.Always
+                        : !candidate.IsSeparator && candidate.ClipboardCondition != ClipboardMatchKind.Always;
+                    if (sameSection
+                        && string.Equals(
+                            candidate.Category.Trim(),
+                            category.Category,
+                            StringComparison.Ordinal))
+                    {
+                        last = i;
+                    }
+                }
+
+                index = last >= 0 ? last + 1 : _vm.Items.Count;
+            }
+            else
+            {
+                index = _vm.SelectedItem is null
+                    ? _vm.Items.Count
+                    : _vm.Items.IndexOf(_vm.SelectedItem) + 1;
+            }
 
             _vm.Items.Insert(index, item);
             _vm.SelectedItem = item;
-            ItemsList.ScrollIntoView(item);
+            ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
             _vm.RefreshCategories();
         }
 
@@ -334,26 +361,26 @@ namespace MyTaskTray
             }
 
             if (FindContainer(e.OriginalSource) is not ListBoxItem container
-                || container.DataContext is not ClipItem item)
+                || container.DataContext is not MenuOutlineRow { IsSection: false } row)
             {
                 return;
             }
 
-            _draggingItem = item;
+            _draggingRow = row;
             try
             {
-                DragDrop.DoDragDrop(container, item, DragDropEffects.Move);
+                DragDrop.DoDragDrop(container, row, DragDropEffects.Move);
             }
             finally
             {
-                _draggingItem = null;
+                _draggingRow = null;
                 ClearDropIndicators();
             }
         }
 
         private void OnListDragOver(object sender, DragEventArgs e)
         {
-            if (_draggingItem is null)
+            if (_draggingRow is null)
             {
                 ClearDropIndicators();
                 e.Effects = DragDropEffects.None;
@@ -362,7 +389,12 @@ namespace MyTaskTray
             }
 
             if (FindContainer(e.OriginalSource) is ListBoxItem container
-                && !ReferenceEquals(container.DataContext, _draggingItem))
+                && container.DataContext is MenuOutlineRow target
+                && !target.IsSection
+                && target.Section == _draggingRow.Section
+                && !ReferenceEquals(target, _draggingRow)
+                && !(_draggingRow.IsCategory
+                    && string.Equals(_draggingRow.Category, target.Category, StringComparison.Ordinal)))
             {
                 bool below = e.GetPosition(container).Y > container.ActualHeight / 2;
                 SetDropIndicator(container, below ? DropPosition.Below : DropPosition.Above);
@@ -382,42 +414,23 @@ namespace MyTaskTray
         {
             ClearDropIndicators();
 
-            if (_draggingItem is not ClipItem moving)
+            if (_draggingRow is not MenuOutlineRow moving)
             {
                 return;
             }
-
-            int from = _vm.Items.IndexOf(moving);
-            if (from < 0)
-            {
-                return;
-            }
-
-            int to = _vm.Items.Count - 1;
 
             if (FindContainer(e.OriginalSource) is ListBoxItem container
-                && container.DataContext is ClipItem dropTarget
-                && !ReferenceEquals(dropTarget, moving))
+                && container.DataContext is MenuOutlineRow target
+                && !target.IsSection
+                && target.Section == moving.Section
+                && !ReferenceEquals(target, moving))
             {
-                int targetIndex = _vm.Items.IndexOf(dropTarget);
                 bool below = e.GetPosition(container).Y > container.ActualHeight / 2;
-                to = below ? targetIndex + 1 : targetIndex;
-
-                // 自分を抜いた後の位置に合わせる
-                if (from < to)
+                if (_vm.MoveOutlineRow(moving, target, below))
                 {
-                    to--;
+                    ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
                 }
             }
-
-            to = Math.Clamp(to, 0, _vm.Items.Count - 1);
-            if (to != from)
-            {
-                _vm.Items.Move(from, to);
-            }
-
-            _vm.SelectedItem = moving;
-            ItemsList.ScrollIntoView(moving);
             e.Handled = true;
         }
 
@@ -544,13 +557,91 @@ namespace MyTaskTray
         // カテゴリ候補
         // ==================================================================
 
-        private void OnOpenCategoryPopup(object sender, RoutedEventArgs e)
+        private void OnToggleCategory(object sender, RoutedEventArgs e)
         {
-            if (!_vm.HasCategories)
+            if (sender is not Button { DataContext: MenuOutlineRow row })
             {
                 return;
             }
 
+            _vm.SelectedOutlineRow = row;
+            _vm.ToggleCategory(row);
+            ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
+            e.Handled = true;
+        }
+
+        private void OnRenameCategory(object sender, RoutedEventArgs e)
+        {
+            if (_vm.SelectedOutlineRow is not { IsCategory: true } selected)
+            {
+                return;
+            }
+
+            string next = _vm.CategoryNameDraft.Trim();
+            if (next.Length == 0)
+            {
+                MessageBox.Show(
+                    "カテゴリ名を入力してください。トップレベルへ移す場合は「カテゴリを削除」を使います。",
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                CategoryNameBox.Focus();
+                return;
+            }
+
+            if (_vm.CategoryExists(next, selected.Category))
+            {
+                MessageBoxResult answer = MessageBox.Show(
+                    $"「{next}」はすでにあります。2つのカテゴリをまとめますか？",
+                    "MyTaskTray",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Question);
+                if (answer != MessageBoxResult.OK)
+                {
+                    return;
+                }
+            }
+
+            _vm.RenameSelectedCategory(next);
+            ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
+        }
+
+        private void OnCategoryNameKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter)
+            {
+                return;
+            }
+
+            OnRenameCategory(sender, e);
+            e.Handled = true;
+        }
+
+        private void OnRemoveCategory(object sender, RoutedEventArgs e)
+        {
+            if (_vm.SelectedOutlineRow is not { IsCategory: true } selected)
+            {
+                return;
+            }
+
+            MessageBoxResult answer = MessageBox.Show(
+                $"カテゴリ「{selected.Category}」を削除しますか？\n"
+                    + $"中の {_vm.SelectedCategoryItemCount} 件の項目は削除せず、トップレベルへ移します。",
+                "MyTaskTray",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question);
+            if (answer != MessageBoxResult.OK)
+            {
+                return;
+            }
+
+            _vm.RemoveSelectedCategory();
+            ItemsList.ScrollIntoView(_vm.SelectedOutlineRow);
+            ItemsList.Focus();
+        }
+
+        private void OnOpenCategoryPopup(object sender, RoutedEventArgs e)
+        {
             CategoryPopup.IsOpen = true;
         }
 
@@ -565,6 +656,18 @@ namespace MyTaskTray
             _vm.SelectedItem.Category = category;
             CategoryBox.Focus();
             CategoryBox.CaretIndex = CategoryBox.Text.Length;
+        }
+
+        private void OnClearCategory(object sender, RoutedEventArgs e)
+        {
+            if (_vm.SelectedItem is null)
+            {
+                return;
+            }
+
+            CategoryPopup.IsOpen = false;
+            _vm.SelectedItem.Category = string.Empty;
+            CategoryBox.Focus();
         }
 
         /// <summary>

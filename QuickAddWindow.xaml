@@ -21,6 +21,48 @@
             <TextBox x:Name="NameBox" MaxLength="120" />
 
             <TextBlock Margin="0,12,0,4" Style="{StaticResource FieldLabel}"
+                       Text="追加先（名前を入力して新しいカテゴリも作れます）" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="CategoryBox" Grid.Column="0"
+                         TextChanged="OnCategoryBoxTextChanged"
+                         GotKeyboardFocus="OnCategoryBoxGotKeyboardFocus" />
+                <TextBlock x:Name="CategoryPlaceholder" Grid.Column="0" Text="トップレベル"
+                           Margin="9,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                           Foreground="{DynamicResource Brush.Text.Disabled}" />
+                <Button Grid.Column="1" Content="▾" Margin="5,0,0,0"
+                        Style="{StaticResource IconButton}" ToolTip="既存の追加先から選ぶ"
+                        Click="OnOpenCategoryPopup" />
+            </Grid>
+
+            <Popup x:Name="CategoryPopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"
+                   Placement="Bottom" PlacementTarget="{Binding ElementName=CategoryBox}"
+                   VerticalOffset="4">
+                <Border Style="{StaticResource PopupCard}" MinWidth="180" Margin="10">
+                    <DockPanel Margin="8">
+                        <Button DockPanel.Dock="Top" Style="{StaticResource RowButton}"
+                                Content="トップレベル" FontWeight="SemiBold"
+                                HorizontalContentAlignment="Left" Click="OnPickTopLevel" />
+                        <Border DockPanel.Dock="Top" Height="1" Margin="4,5"
+                                Background="{DynamicResource Brush.Separator}" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="CategoryList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource RowButton}" Click="OnPickCategory"
+                                                Content="{Binding}" HorizontalContentAlignment="Left" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Popup>
+
+            <TextBlock Margin="0,12,0,4" Style="{StaticResource FieldLabel}"
                        Text="登録される文字列" />
             <Border Padding="9,7" CornerRadius="6"
                     Background="{DynamicResource Brush.Surface.Alt}"

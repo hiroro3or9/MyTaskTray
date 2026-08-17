@@ -112,6 +112,7 @@ namespace MyTaskTray
         private AppSettings _settings;
         private SettingsWindow? _settingsWindow;
         private QuickAddWindow? _quickAddWindow;
+        private string _lastQuickAddCategory = string.Empty;
         private GlobalHotKey? _menuHotKey;
         private Icon? _icon;
         private bool _disposed;
@@ -2657,14 +2658,25 @@ namespace MyTaskTray
                 return;
             }
 
-            QuickAddWindow window = new(clipboard, escaped);
+            IReadOnlyList<string> categories = _settingsWindow?.GetKnownCategories()
+                ?? [.. _settings.Items
+                    .Select(item => item.Category.Trim())
+                    .Where(category => category.Length > 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(category => category, StringComparer.CurrentCulture)];
+            string initialCategory = categories.Contains(_lastQuickAddCategory, StringComparer.Ordinal)
+                ? _lastQuickAddCategory
+                : string.Empty;
+
+            QuickAddWindow window = new(clipboard, escaped, categories, initialCategory);
             _quickAddWindow = window;
             window.Closed += (_, _) =>
             {
                 _quickAddWindow = null;
                 if (window.Accepted)
                 {
-                    AddQuickItem(text, window.ItemName, escaped);
+                    _lastQuickAddCategory = window.ItemCategory;
+                    AddQuickItem(text, window.ItemName, window.ItemCategory, escaped);
                 }
             };
 
@@ -2677,13 +2689,14 @@ namespace MyTaskTray
         /// 設定画面が開いている場合は、画面が開いた時点の複製を持っていて
         /// 保存で上書きされてしまうため、ファイルではなく画面の一覧へ足す。
         /// </summary>
-        private void AddQuickItem(string text, string name, bool escaped)
+        private void AddQuickItem(string text, string name, string category, bool escaped)
         {
             ClipItem item = new()
             {
                 Id = ClipItem.NewId(),
                 Name = name.Trim(),
                 Text = text,
+                Category = category.Trim(),
             };
 
             string escapeNote = escaped
@@ -2716,7 +2729,10 @@ namespace MyTaskTray
                 (string.IsNullOrWhiteSpace(item.Name)
                     ? TemplateEngine.ToSingleLine(item.Text, 60)
                     : item.Name)
-                    + "\nメニューの末尾に追加しました。並べ替えは設定画面から行えます" + escapeNote);
+                    + (item.Category.Length == 0
+                        ? "\nトップレベルの末尾に追加しました"
+                        : $"\nカテゴリ「{item.Category}」に追加しました")
+                    + "。並べ替えは設定画面から行えます" + escapeNote);
         }
 
         /// <summary>同じ内容の項目が既にあるか探す。区切り線は対象外。</summary>

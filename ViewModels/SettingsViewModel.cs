@@ -73,6 +73,7 @@ namespace MyTaskTray.ViewModels
 
         private readonly ICollectionView _itemsView;
         private readonly Dictionary<string, bool> _actionStates;
+        private readonly HashSet<(MenuOutlineSection Section, string Category)> _collapsedCategories = [];
         private ForegroundApp _appContext;
 
         // 画面上で「次の番号」を直接編集した項目の Id。
@@ -85,6 +86,8 @@ namespace MyTaskTray.ViewModels
         private readonly List<ClipItem> _subscribedItems = [];
 
         private ClipItem? _selectedItem;
+        private MenuOutlineRow? _selectedOutlineRow;
+        private string _categoryNameDraft = string.Empty;
         private string _filterText = string.Empty;
         private bool _showCopyNotification;
         private string _menuHotKey = string.Empty;
@@ -94,6 +97,11 @@ namespace MyTaskTray.ViewModels
         // 取り込みは利用者の編集ではないため、「未保存」にも
         // 「画面で直接指定した番号」にも数えてはいけない。
         private bool _adoptingSequence;
+
+        // カテゴリ名の一括変更や並べ替えでは PropertyChanged / CollectionChanged が連続する。
+        // 途中の不完全な一覧を何度も作らず、操作の最後に 1 度だけアウトラインを更新する。
+        private bool _suppressOutlineRebuild;
+        private bool _rebuildingOutline;
 
         // スプリントの設定は入力途中でも打ち直せるよう文字列で持ち、
         // 解釈できたときだけ差し込みに反映する。
@@ -140,6 +148,7 @@ namespace MyTaskTray.ViewModels
             _sprintLengthText = settings.SprintLengthDays.ToString(CultureInfo.InvariantCulture);
 
             Items = new ObservableCollection<ClipItem>(settings.Items);
+            MenuOutline = [];
             KnownCategories = [];
             KnownApps = [.. recentApps];
             (TrayActionDefinition Action, ActionSettingRow Row)[] actionRows =
@@ -213,12 +222,16 @@ namespace MyTaskTray.ViewModels
             Items.CollectionChanged += OnItemsCollectionChanged;
             ResubscribeItems();
 
+            RebuildMenuOutline();
             SelectedItem = Items.FirstOrDefault();
         }
 
         public int Version { get; }
 
         public ObservableCollection<ClipItem> Items { get; }
+
+        /// <summary>実際のトレイメニュー構造に寄せて再構成した、設定画面用の一覧。</summary>
+        public ObservableCollection<MenuOutlineRow> MenuOutline { get; }
 
         /// <summary>カテゴリ入力欄の候補。</summary>
         public ObservableCollection<string> KnownCategories { get; }
@@ -501,6 +514,7 @@ namespace MyTaskTray.ViewModels
 
                 _filterText = next;
                 _itemsView.Refresh();
+                RebuildMenuOutline();
 
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(HasFilter));
@@ -530,8 +544,11 @@ namespace MyTaskTray.ViewModels
 
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(HasSelection));
+                OnPropertyChanged(nameof(CanDuplicate));
+                OnPropertyChanged(nameof(CanDelete));
                 OnPropertyChanged(nameof(CanReorder));
                 OnPropertyChanged(nameof(IsItemEditable));
+                OnPropertyChanged(nameof(IsCategoryEditable));
                 OnPropertyChanged(nameof(IsSequenceVisible));
                 OnPropertyChanged(nameof(IsChoiceVisible));
                 OnPropertyChanged(nameof(ChoiceStatus));
@@ -542,24 +559,111 @@ namespace MyTaskTray.ViewModels
                 OnPropertyChanged(nameof(ClipboardConditionStatus));
                 OnPropertyChanged(nameof(AppConditionStatus));
                 OnPropertyChanged(nameof(ClipFormatStatus));
+
+                if (!_suppressOutlineRebuild)
+                {
+                    SelectOutlineForItem(value);
+                }
             }
         }
 
         public bool HasSelection => SelectedItem is not null;
 
+        /// <summary>アウトラインで現在選ばれている行。</summary>
+        public MenuOutlineRow? SelectedOutlineRow
+        {
+            get => _selectedOutlineRow;
+            set
+            {
+                if (_rebuildingOutline && value is null)
+                {
+                    return;
+                }
+
+                if (ReferenceEquals(_selectedOutlineRow, value))
+                {
+                    return;
+                }
+
+                _selectedOutlineRow = value;
+                OnPropertyChanged();
+
+                _suppressOutlineRebuild = true;
+                try
+                {
+                    SelectedItem = value?.Item;
+                }
+                finally
+                {
+                    _suppressOutlineRebuild = false;
+                }
+
+                CategoryNameDraft = value is { IsCategory: true }
+                    ? value.Category
+                    : string.Empty;
+
+                OnPropertyChanged(nameof(CanDelete));
+                OnPropertyChanged(nameof(CanReorder));
+                OnPropertyChanged(nameof(IsCategoryEditable));
+                OnPropertyChanged(nameof(ShowEditorHint));
+                OnPropertyChanged(nameof(EditorHint));
+                OnPropertyChanged(nameof(SelectedCategoryItemCount));
+                OnPropertyChanged(nameof(SelectedCategoryLocation));
+            }
+        }
+
+        /// <summary>カテゴリ名の編集欄。確定するまで項目側のカテゴリ名は変えない。</summary>
+        public string CategoryNameDraft
+        {
+            get => _categoryNameDraft;
+            set
+            {
+                string next = value ?? string.Empty;
+                if (string.Equals(_categoryNameDraft, next, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _categoryNameDraft = next;
+                OnPropertyChanged();
+            }
+        }
+
+        public bool CanDuplicate => SelectedItem is not null;
+
+        public bool CanDelete => SelectedItem is not null || SelectedOutlineRow?.IsCategory == true;
+
         /// <summary>並べ替えできるのは、絞り込みをしていないときだけ。</summary>
-        public bool CanReorder => HasSelection && !HasFilter;
+        public bool CanReorder
+            => SelectedOutlineRow is { IsSection: false } && !HasFilter;
 
         /// <summary>区切り線は編集する内容がないため、編集欄自体を出さない。</summary>
         public bool IsItemEditable => SelectedItem is not null && !SelectedItem.IsSeparator;
 
+        /// <summary>カテゴリ見出しを選んでいるとき、カテゴリ単位の編集欄を出す。</summary>
+        public bool IsCategoryEditable => SelectedOutlineRow?.IsCategory == true;
+
         /// <summary>編集欄の代わりに案内を出すかどうか。</summary>
-        public bool ShowEditorHint => !IsItemEditable;
+        public bool ShowEditorHint => !IsItemEditable && !IsCategoryEditable;
 
         /// <summary>編集できないときに出す案内。</summary>
-        public string EditorHint => SelectedItem is null
-            ? "左の一覧から項目を選ぶか、「追加」で新しい項目を作成してください。"
-            : "区切り線には編集する内容がありません。メニューのグループ分けに使えます。";
+        public string EditorHint => SelectedItem is not null
+            ? "区切り線には編集する内容がありません。メニューのグループ分けに使えます。"
+            : SelectedOutlineRow?.IsSection == true
+                ? "この領域には、トレイメニューで同じ場所に表示される項目がまとまります。"
+                : "左の一覧から項目かカテゴリを選ぶか、「追加」で新しい項目を作成してください。";
+
+        public int SelectedCategoryItemCount
+            => SelectedOutlineRow is { IsCategory: true } row
+                ? Items.Count(item => CategoryEquals(item.Category, row.Category))
+                : 0;
+
+        public string SelectedCategoryLocation
+            => SelectedOutlineRow is { IsCategory: true } row
+                ? row.Section == MenuOutlineSection.Regular
+                    ? "通常メニューに表示されるカテゴリです。"
+                    : "条件に合うとき「この内容でできること」の中に表示されます。"
+                : string.Empty;
 
         /// <summary>選択項目が連番を使っているときだけ、連番の設定欄を出す。</summary>
         public bool IsSequenceVisible => IsItemEditable && SelectedItem!.UsesSequence;
@@ -946,6 +1050,468 @@ namespace MyTaskTray.ViewModels
         /// <summary>カテゴリ候補があるかどうか。</summary>
         public bool HasCategories => KnownCategories.Count > 0;
 
+        /// <summary>カテゴリの開閉を切り替える。検索中は一致項目を必ず見せるため開閉しない。</summary>
+        public void ToggleCategory(MenuOutlineRow row)
+        {
+            if (!row.IsCategory || HasFilter)
+            {
+                return;
+            }
+
+            (MenuOutlineSection, string) key = (row.Section, row.Category);
+            if (!_collapsedCategories.Add(key))
+            {
+                _collapsedCategories.Remove(key);
+            }
+
+            _selectedOutlineRow = row;
+            RebuildMenuOutline();
+        }
+
+        /// <summary>選択カテゴリの名前を、そのカテゴリに属する全項目へまとめて反映する。</summary>
+        public void RenameSelectedCategory(string newName)
+        {
+            if (SelectedOutlineRow is not { IsCategory: true } selected)
+            {
+                return;
+            }
+
+            string oldName = selected.Category;
+            string normalized = (newName ?? string.Empty).Trim();
+            if (normalized.Length == 0)
+            {
+                return;
+            }
+
+            MenuOutlineSection section = selected.Section;
+            _suppressOutlineRebuild = true;
+            try
+            {
+                foreach (ClipItem item in Items.Where(item => CategoryEquals(item.Category, oldName)))
+                {
+                    item.Category = normalized;
+                }
+            }
+            finally
+            {
+                _suppressOutlineRebuild = false;
+            }
+
+            RefreshCategories();
+            RebuildMenuOutline();
+            SelectCategory(section, normalized);
+        }
+
+        /// <summary>選択カテゴリをなくし、中の項目をトップレベルへ移す。</summary>
+        public void RemoveSelectedCategory()
+        {
+            if (SelectedOutlineRow is not { IsCategory: true } selected)
+            {
+                return;
+            }
+
+            string category = selected.Category;
+            MenuOutlineSection section = selected.Section;
+            List<ClipItem> affected = [.. Items.Where(item => CategoryEquals(item.Category, category))];
+
+            _suppressOutlineRebuild = true;
+            try
+            {
+                foreach (ClipItem item in affected)
+                {
+                    item.Category = string.Empty;
+                }
+            }
+            finally
+            {
+                _suppressOutlineRebuild = false;
+            }
+
+            RefreshCategories();
+            RebuildMenuOutline();
+
+            ClipItem? next = affected.FirstOrDefault(item => GetSection(item) == section)
+                ?? affected.FirstOrDefault();
+            SelectedItem = next;
+        }
+
+        public bool CategoryExists(string category, string? excluding = null)
+        {
+            string normalized = (category ?? string.Empty).Trim();
+            return normalized.Length > 0
+                && Items.Any(item => CategoryEquals(item.Category, normalized)
+                    && (excluding is null || !CategoryEquals(item.Category, excluding)));
+        }
+
+        /// <summary>選択行を、画面に見えている同じ階層の中で上下へ移動する。</summary>
+        public void MoveSelectedOutline(int offset)
+        {
+            if (!CanReorder || SelectedOutlineRow is not { } selected || offset == 0)
+            {
+                return;
+            }
+
+            List<OutlineUnit> units = BuildSectionUnits(selected.Section);
+            if (selected.IsCategory)
+            {
+                int index = units.FindIndex(unit => CategoryEquals(unit.Category, selected.Category));
+                int target = index + Math.Sign(offset);
+                if (index < 0 || target < 0 || target >= units.Count)
+                {
+                    return;
+                }
+
+                (units[index], units[target]) = (units[target], units[index]);
+                ApplySectionOrder(selected.Section, units.SelectMany(unit => unit.Items));
+                SelectCategory(selected.Section, selected.Category);
+                return;
+            }
+
+            if (selected.Item is not { } moving)
+            {
+                return;
+            }
+
+            if (selected.Category.Length > 0)
+            {
+                OutlineUnit? categoryUnit = units.FirstOrDefault(
+                    unit => CategoryEquals(unit.Category, selected.Category));
+                if (categoryUnit is null)
+                {
+                    return;
+                }
+
+                int index = categoryUnit.Items.IndexOf(moving);
+                int target = index + Math.Sign(offset);
+                if (index < 0 || target < 0 || target >= categoryUnit.Items.Count)
+                {
+                    return;
+                }
+
+                (categoryUnit.Items[index], categoryUnit.Items[target])
+                    = (categoryUnit.Items[target], categoryUnit.Items[index]);
+            }
+            else
+            {
+                int index = units.FindIndex(unit => unit.Items.Count == 1
+                    && ReferenceEquals(unit.Items[0], moving));
+                int target = index + Math.Sign(offset);
+                if (index < 0 || target < 0 || target >= units.Count)
+                {
+                    return;
+                }
+
+                (units[index], units[target]) = (units[target], units[index]);
+            }
+
+            ApplySectionOrder(selected.Section, units.SelectMany(unit => unit.Items));
+            SelectedItem = moving;
+        }
+
+        /// <summary>ドラッグした項目またはカテゴリを、同じメニュー領域の指定行へ移す。</summary>
+        public bool MoveOutlineRow(MenuOutlineRow moving, MenuOutlineRow target, bool below)
+        {
+            if (HasFilter
+                || moving.IsSection
+                || target.IsSection
+                || moving.Section != target.Section
+                || ReferenceEquals(moving, target))
+            {
+                return false;
+            }
+
+            if (moving.IsCategory)
+            {
+                string targetCategory = target.Category;
+                if (CategoryEquals(moving.Category, targetCategory))
+                {
+                    return false;
+                }
+
+                List<OutlineUnit> units = BuildSectionUnits(moving.Section);
+                int from = units.FindIndex(unit => CategoryEquals(unit.Category, moving.Category));
+                int to = targetCategory.Length > 0
+                    ? units.FindIndex(unit => CategoryEquals(unit.Category, targetCategory))
+                    : units.FindIndex(unit => target.Item is not null
+                        && unit.Items.Count == 1
+                        && ReferenceEquals(unit.Items[0], target.Item));
+                if (from < 0 || to < 0)
+                {
+                    return false;
+                }
+
+                OutlineUnit unit = units[from];
+                units.RemoveAt(from);
+                if (from < to)
+                {
+                    to--;
+                }
+
+                if (below)
+                {
+                    to++;
+                }
+
+                units.Insert(Math.Clamp(to, 0, units.Count), unit);
+                ApplySectionOrder(moving.Section, units.SelectMany(entry => entry.Items));
+                SelectCategory(moving.Section, moving.Category);
+                return true;
+            }
+
+            if (moving.Item is not { } movingItem)
+            {
+                return false;
+            }
+
+            string destinationCategory = target.Category;
+
+            _suppressOutlineRebuild = true;
+            try
+            {
+                movingItem.Category = destinationCategory;
+
+                List<ClipItem> ordered = BuildSectionUnits(moving.Section)
+                    .SelectMany(unit => unit.Items)
+                    .Where(item => !ReferenceEquals(item, movingItem))
+                    .ToList();
+
+                int insertAt;
+                if (target.Item is { } targetItem)
+                {
+                    insertAt = ordered.IndexOf(targetItem);
+                    if (insertAt < 0)
+                    {
+                        return false;
+                    }
+
+                    if (below)
+                    {
+                        insertAt++;
+                    }
+                }
+                else
+                {
+                    int lastInCategory = ordered.FindLastIndex(
+                        item => CategoryEquals(item.Category, destinationCategory));
+                    insertAt = lastInCategory + 1;
+                }
+
+                ordered.Insert(Math.Clamp(insertAt, 0, ordered.Count), movingItem);
+                ApplySectionOrderCore(moving.Section, ordered);
+            }
+            finally
+            {
+                _suppressOutlineRebuild = false;
+            }
+
+            RefreshCategories();
+            RebuildMenuOutline();
+            SelectedItem = movingItem;
+            return true;
+        }
+
+        private void RebuildMenuOutline()
+        {
+            ClipItem? selectedItem = SelectedItem;
+            MenuOutlineSection? selectedSection = _selectedOutlineRow?.Section;
+            string selectedCategory = _selectedOutlineRow?.IsCategory == true
+                ? _selectedOutlineRow.Category
+                : string.Empty;
+
+            _rebuildingOutline = true;
+            try
+            {
+                MenuOutline.Clear();
+                AddSectionRows(MenuOutlineSection.Regular);
+                AddSectionRows(MenuOutlineSection.Contextual);
+            }
+            finally
+            {
+                _rebuildingOutline = false;
+            }
+
+            MenuOutlineRow? nextSelection = selectedItem is not null
+                ? MenuOutline.FirstOrDefault(row => ReferenceEquals(row.Item, selectedItem))
+                : selectedCategory.Length > 0 && selectedSection is { } section
+                    ? MenuOutline.FirstOrDefault(row => row.IsCategory
+                        && row.Section == section
+                        && CategoryEquals(row.Category, selectedCategory))
+                    : null;
+
+            if (!ReferenceEquals(_selectedOutlineRow, nextSelection))
+            {
+                _selectedOutlineRow = nextSelection;
+                OnPropertyChanged(nameof(SelectedOutlineRow));
+            }
+
+            OnPropertyChanged(nameof(CanDelete));
+            OnPropertyChanged(nameof(CanReorder));
+            OnPropertyChanged(nameof(IsCategoryEditable));
+            OnPropertyChanged(nameof(ShowEditorHint));
+            OnPropertyChanged(nameof(EditorHint));
+            OnPropertyChanged(nameof(SelectedCategoryItemCount));
+        }
+
+        private void AddSectionRows(MenuOutlineSection section)
+        {
+            List<ClipItem> sectionItems = [.. Items
+                .Where(item => GetSection(item) == section)
+                .Where(MatchesFilter)];
+
+            // 通常メニューは空でも追加先として意味がある。条件付き領域は項目があるときだけ出す。
+            if (section == MenuOutlineSection.Contextual && sectionItems.Count == 0)
+            {
+                return;
+            }
+
+            MenuOutline.Add(MenuOutlineRow.CreateSection(section));
+
+            HashSet<string> emittedCategories = new(StringComparer.Ordinal);
+            foreach (ClipItem item in sectionItems)
+            {
+                string category = NormalizeCategory(item.Category);
+                if (category.Length == 0)
+                {
+                    MenuOutline.Add(MenuOutlineRow.CreateItem(section, item, string.Empty));
+                    continue;
+                }
+
+                if (!emittedCategories.Add(category))
+                {
+                    continue;
+                }
+
+                List<ClipItem> children = [.. sectionItems
+                    .Where(candidate => CategoryEquals(candidate.Category, category))];
+                bool expanded = HasFilter || !_collapsedCategories.Contains((section, category));
+                MenuOutline.Add(MenuOutlineRow.CreateCategory(
+                    section,
+                    category,
+                    children.Count,
+                    expanded));
+
+                if (!expanded)
+                {
+                    continue;
+                }
+
+                foreach (ClipItem child in children)
+                {
+                    MenuOutline.Add(MenuOutlineRow.CreateItem(section, child, category));
+                }
+            }
+        }
+
+        private void SelectOutlineForItem(ClipItem? item)
+        {
+            MenuOutlineRow? row = item is null
+                ? null
+                : MenuOutline.FirstOrDefault(candidate => ReferenceEquals(candidate.Item, item));
+            if (row is null && item is not null && NormalizeCategory(item.Category).Length > 0 && !HasFilter)
+            {
+                _collapsedCategories.Remove((GetSection(item), NormalizeCategory(item.Category)));
+                RebuildMenuOutline();
+                row = MenuOutline.FirstOrDefault(candidate => ReferenceEquals(candidate.Item, item));
+            }
+
+            if (ReferenceEquals(_selectedOutlineRow, row))
+            {
+                return;
+            }
+
+            _selectedOutlineRow = row;
+            OnPropertyChanged(nameof(SelectedOutlineRow));
+        }
+
+        private void SelectCategory(MenuOutlineSection section, string category)
+        {
+            SelectedOutlineRow = MenuOutline.FirstOrDefault(row => row.IsCategory
+                && row.Section == section
+                && CategoryEquals(row.Category, category));
+        }
+
+        private List<OutlineUnit> BuildSectionUnits(MenuOutlineSection section)
+        {
+            List<ClipItem> sectionItems = [.. Items.Where(item => GetSection(item) == section)];
+            List<OutlineUnit> units = [];
+            Dictionary<string, OutlineUnit> categories = new(StringComparer.Ordinal);
+
+            foreach (ClipItem item in sectionItems)
+            {
+                string category = NormalizeCategory(item.Category);
+                if (category.Length == 0)
+                {
+                    units.Add(new OutlineUnit(string.Empty, [item]));
+                    continue;
+                }
+
+                if (!categories.TryGetValue(category, out OutlineUnit? unit))
+                {
+                    unit = new OutlineUnit(category, []);
+                    categories.Add(category, unit);
+                    units.Add(unit);
+                }
+
+                unit.Items.Add(item);
+            }
+
+            return units;
+        }
+
+        private void ApplySectionOrder(MenuOutlineSection section, IEnumerable<ClipItem> ordered)
+        {
+            _suppressOutlineRebuild = true;
+            try
+            {
+                ApplySectionOrderCore(section, [.. ordered]);
+            }
+            finally
+            {
+                _suppressOutlineRebuild = false;
+            }
+
+            RebuildMenuOutline();
+        }
+
+        private void ApplySectionOrderCore(MenuOutlineSection section, IReadOnlyList<ClipItem> ordered)
+        {
+            List<ClipItem> final = [.. Items];
+            List<int> positions = [.. final
+                .Select((item, index) => (item, index))
+                .Where(entry => GetSection(entry.item) == section)
+                .Select(entry => entry.index)];
+            if (positions.Count != ordered.Count)
+            {
+                return;
+            }
+
+            for (int i = 0; i < positions.Count; i++)
+            {
+                final[positions[i]] = ordered[i];
+            }
+
+            for (int target = 0; target < final.Count; target++)
+            {
+                int current = Items.IndexOf(final[target]);
+                if (current >= 0 && current != target)
+                {
+                    Items.Move(current, target);
+                }
+            }
+        }
+
+        private static MenuOutlineSection GetSection(ClipItem item)
+            => item.IsSeparator || item.ClipboardCondition == ClipboardMatchKind.Always
+                ? MenuOutlineSection.Regular
+                : MenuOutlineSection.Contextual;
+
+        private static string NormalizeCategory(string? category) => (category ?? string.Empty).Trim();
+
+        private static bool CategoryEquals(string? left, string? right)
+            => string.Equals(NormalizeCategory(left), NormalizeCategory(right), StringComparison.Ordinal);
+
+        private sealed record OutlineUnit(string Category, List<ClipItem> Items);
+
         /// <summary>
         /// 保存用の設定オブジェクトを作る。ホットキーとスプリントは保存前に検証済みの値を受け取る。
         /// </summary>
@@ -1051,6 +1617,11 @@ namespace MyTaskTray.ViewModels
 
             IsDirty = true;
             OnPropertyChanged(nameof(StatusText));
+
+            if (!_suppressOutlineRebuild)
+            {
+                RebuildMenuOutline();
+            }
         }
 
         /// <summary>現在の項目に PropertyChanged を張り直す。</summary>
@@ -1115,7 +1686,23 @@ namespace MyTaskTray.ViewModels
 
             if (e.PropertyName == nameof(ClipItem.Category))
             {
-                RefreshCategories();
+                if (!_suppressOutlineRebuild)
+                {
+                    RefreshCategories();
+                }
+            }
+
+            bool affectsOutline = e.PropertyName is nameof(ClipItem.Category)
+                or nameof(ClipItem.IsSeparator)
+                or nameof(ClipItem.ClipboardCondition)
+                || (HasFilter && e.PropertyName is nameof(ClipItem.Name)
+                    or nameof(ClipItem.Text)
+                    or nameof(ClipItem.ClipboardPattern)
+                    or nameof(ClipItem.AppProcess)
+                    or nameof(ClipItem.AppTitlePattern));
+            if (affectsOutline && !_suppressOutlineRebuild)
+            {
+                RebuildMenuOutline();
             }
         }
 

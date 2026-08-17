@@ -74,6 +74,62 @@
             </Grid>
         </DataTemplate>
 
+        <!-- 実際のメニュー構造に寄せたアウトラインの 1 行 -->
+        <DataTemplate x:Key="MenuOutlineRowTemplate">
+            <Grid>
+                <!-- 通常メニュー / この内容でできること -->
+                <Border Padding="4,7,4,5" Margin="0,2,0,1"
+                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                        Visibility="{Binding IsSection, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding SectionTitle}" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding SectionHint}" FontSize="10.5"
+                                   Foreground="{DynamicResource Brush.Text.Secondary}" />
+                    </Grid>
+                </Border>
+
+                <!-- カテゴリ見出し -->
+                <Grid Margin="2,2,0,2"
+                      Visibility="{Binding IsCategory, Converter={StaticResource BoolToVis}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="24" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="{Binding ExpandGlyph}" Width="22" Height="22"
+                            MinHeight="0" Padding="0" Style="{StaticResource SubtleButton}"
+                            ToolTip="カテゴリを折りたたむ / 展開する"
+                            Click="OnToggleCategory" />
+                    <TextBlock Grid.Column="1" Text="{Binding Category}" Margin="5,0,8,0"
+                               VerticalAlignment="Center" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis" />
+                    <Border Grid.Column="2" Style="{StaticResource Badge}" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding ItemCountText}" Style="{StaticResource BadgeText}" />
+                    </Border>
+                </Grid>
+
+                <!-- 項目。カテゴリ配下だけ字下げする -->
+                <Border Visibility="{Binding IsItem, Converter={StaticResource BoolToVis}}">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Margin" Value="0" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsCategoryItem}" Value="True">
+                                    <Setter Property="Margin" Value="27,0,0,0" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <ContentPresenter Content="{Binding Item}"
+                                      ContentTemplate="{StaticResource ClipItemTemplate}" />
+                </Border>
+            </Grid>
+        </DataTemplate>
+
         <!-- 組み込みアクションの表示設定 1 件 -->
         <DataTemplate x:Key="ActionSettingTemplate">
             <CheckBox IsChecked="{Binding IsVisible}" Margin="2,5"
@@ -105,9 +161,9 @@
 
         <!-- ヘッダー -->
         <StackPanel Grid.Row="0" Margin="18,16,18,0">
-            <TextBlock Text="コピー項目の設定" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="メニュー構成" FontSize="18" FontWeight="SemiBold" />
             <TextBlock Margin="0,3,0,0" Style="{StaticResource Hint}"
-                       Text="一覧の並び順がそのままトレイメニューの順序になります。行をドラッグしても並べ替えできます。" />
+                       Text="カテゴリと項目を、トレイメニューに表示される構造で編集します。ドラッグして移動・並べ替えできます。" />
         </StackPanel>
 
         <!-- 本体 -->
@@ -144,9 +200,9 @@
                             <Button Content="区切り線" Padding="10,4" Margin="5,0,0,0" Click="OnAddSeparator"
                                     ToolTip="メニューに水平線を入れる" />
                             <Button Content="複製" Padding="10,4" Margin="5,0,0,0" Click="OnDuplicateItem"
-                                    IsEnabled="{Binding HasSelection}" ToolTip="選択項目を複製（Ctrl+D）" />
+                                    IsEnabled="{Binding CanDuplicate}" ToolTip="選択項目を複製（Ctrl+D）" />
                             <Button Content="削除" Padding="10,4" Margin="5,0,0,0" Click="OnDeleteItem"
-                                    IsEnabled="{Binding HasSelection}" ToolTip="選択項目を削除（Delete）" />
+                                    IsEnabled="{Binding CanDelete}" ToolTip="選択した項目またはカテゴリを削除（Delete）" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Content="▲" Style="{StaticResource IconButton}" Click="OnMoveUp"
@@ -160,9 +216,9 @@
                                Text="{Binding StatusText}" />
 
                     <ListBox x:Name="ItemsList"
-                             ItemsSource="{Binding Items}"
-                             SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                             ItemTemplate="{StaticResource ClipItemTemplate}"
+                             ItemsSource="{Binding MenuOutline}"
+                             SelectedItem="{Binding SelectedOutlineRow, Mode=TwoWay}"
+                             ItemTemplate="{StaticResource MenuOutlineRowTemplate}"
                              AllowDrop="True"
                              SelectionChanged="OnSelectionChanged"
                              PreviewMouseLeftButtonDown="OnListPreviewMouseLeftButtonDown"
@@ -184,6 +240,53 @@
                                TextAlignment="Center" TextWrapping="Wrap"
                                Foreground="{DynamicResource Brush.Text.Secondary}"
                                Visibility="{Binding ShowEditorHint, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- カテゴリ見出しを選んだときの一括編集 -->
+                    <Grid Margin="16"
+                          Visibility="{Binding IsCategoryEditable, Converter={StaticResource BoolToVis}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="カテゴリの設定" Style="{StaticResource SectionTitle}"
+                                   Margin="0,0,0,12" />
+
+                        <StackPanel Grid.Row="1">
+                            <TextBlock Text="カテゴリ名" Style="{StaticResource FieldLabel}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="CategoryNameBox" Grid.Column="0"
+                                         Text="{Binding CategoryNameDraft, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="OnCategoryNameKeyDown" />
+                                <Button Grid.Column="1" Content="名前を変更" Margin="8,0,0,0"
+                                        Padding="12,4" Click="OnRenameCategory" />
+                            </Grid>
+                        </StackPanel>
+
+                        <Border Grid.Row="2" Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
+                                Background="{DynamicResource Brush.Surface.Alt}"
+                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock>
+                                    <Run Text="{Binding SelectedCategoryItemCount, Mode=OneWay}" />
+                                    <Run Text=" 件の項目がこのカテゴリに属しています。" />
+                                </TextBlock>
+                                <TextBlock Text="{Binding SelectedCategoryLocation}" Margin="0,4,0,0"
+                                           Style="{StaticResource Hint}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <Button Grid.Row="3" Content="カテゴリを削除…" HorizontalAlignment="Left"
+                                Margin="0,14,0,0" Padding="12,4" Click="OnRemoveCategory"
+                                ToolTip="中の項目は削除せず、トップレベルへ移します" />
+                    </Grid>
 
                     <Grid Margin="16" Visibility="{Binding IsItemEditable, Converter={StaticResource BoolToVis}}">
                         <Grid.RowDefinitions>
@@ -208,7 +311,7 @@
 
                         <StackPanel Grid.Row="2" Margin="0,0,0,12">
                             <TextBlock Style="{StaticResource FieldLabel}"
-                                       Text="カテゴリ（空欄ならトップレベル。同じ名前の項目はサブメニューにまとまります）" />
+                                       Text="配置先（空欄ならトップレベル。入力した名前のサブメニューに入ります）" />
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -218,8 +321,7 @@
                                          Text="{Binding SelectedItem.Category, UpdateSourceTrigger=PropertyChanged}" />
                                 <Button x:Name="CategoryPickButton" Grid.Column="1" Content="▾" Margin="5,0,0,0"
                                         Style="{StaticResource IconButton}"
-                                        IsEnabled="{Binding HasCategories}"
-                                        ToolTip="既存のカテゴリから選ぶ" Click="OnOpenCategoryPopup" />
+                                        ToolTip="配置先を選ぶ" Click="OnOpenCategoryPopup" />
                             </Grid>
                         </StackPanel>
 
@@ -590,16 +692,23 @@
                VerticalOffset="4"
                PreviewKeyDown="OnPopupPreviewKeyDown">
             <Border Style="{StaticResource PopupCard}" MinWidth="180" Margin="10">
-                <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
-                    <ItemsControl Margin="8" ItemsSource="{Binding KnownCategories}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Button Style="{StaticResource RowButton}" Click="OnPickCategory"
-                                        Content="{Binding}" HorizontalContentAlignment="Left" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                <DockPanel Margin="8">
+                    <Button DockPanel.Dock="Top" Style="{StaticResource RowButton}"
+                            Content="トップレベル" FontWeight="SemiBold"
+                            HorizontalContentAlignment="Left" Click="OnClearCategory" />
+                    <Border DockPanel.Dock="Top" Height="1" Margin="4,5"
+                            Background="{DynamicResource Brush.Separator}" />
+                    <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding KnownCategories}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource RowButton}" Click="OnPickCategory"
+                                            Content="{Binding}" HorizontalContentAlignment="Left" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
             </Border>
         </Popup>
 

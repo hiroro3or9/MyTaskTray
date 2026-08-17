@@ -1,15 +1,16 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using MyTaskTray.Services;
 
 namespace MyTaskTray
 {
     /// <summary>
-    /// いまコピーしてある文字列を項目として登録するとき、名前だけを尋ねる小さな窓。
+    /// いまコピーしてある文字列を項目として登録するとき、名前と追加先を尋ねる小さな窓。
     ///
     /// <para>
-    /// 設定画面を開かずに登録できることが目的なので、聞くのは名前だけにする。
-    /// カテゴリや差し込みは、後から設定画面で整えられる。
+    /// 設定画面を開かずに登録できることが目的なので、名前は初期値を選択済みにし、
+    /// 追加先も前回値のままなら Enter だけで登録できる。差し込みは後から設定画面で整える。
     /// </para>
     /// </summary>
     public partial class QuickAddWindow : Window
@@ -23,12 +24,28 @@ namespace MyTaskTray
         /// <param name="text">登録される文字列（波かっこのエスケープ前）。</param>
         /// <param name="escaped">波かっこをエスケープしたかどうか。した場合は理由を添える。</param>
         public QuickAddWindow(string text, bool escaped)
+            : this(text, escaped, [], string.Empty)
+        {
+        }
+
+        public QuickAddWindow(
+            string text,
+            bool escaped,
+            IReadOnlyList<string> categories,
+            string initialCategory)
         {
             InitializeComponent();
 
             ItemName = TemplateEngine.ToSingleLine(text, DefaultNameMaxLength);
             NameBox.Text = ItemName;
             PreviewText.Text = TemplateEngine.ToSingleLine(text, 300);
+            CategoryList.ItemsSource = categories
+                .Select(category => category.Trim())
+                .Where(category => category.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(category => category, StringComparer.CurrentCulture)
+                .ToArray();
+            CategoryBox.Text = initialCategory.Trim();
 
             if (escaped)
             {
@@ -44,6 +61,9 @@ namespace MyTaskTray
 
         /// <summary>入力された名前。空のまま追加することもできる。</summary>
         public string ItemName { get; private set; }
+
+        /// <summary>追加先カテゴリ。空文字ならトップレベル。</summary>
+        public string ItemCategory { get; private set; } = string.Empty;
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
@@ -101,13 +121,57 @@ namespace MyTaskTray
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
+                if (CategoryPopup.IsOpen)
+                {
+                    CategoryPopup.IsOpen = false;
+                    return;
+                }
+
                 Close();
             }
+        }
+
+        private void OnOpenCategoryPopup(object sender, RoutedEventArgs e)
+            => CategoryPopup.IsOpen = true;
+
+        private void OnCategoryBoxGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (ReferenceEquals(e.OriginalSource, CategoryBox))
+            {
+                CategoryBox.SelectAll();
+            }
+        }
+
+        private void OnCategoryBoxTextChanged(object sender, TextChangedEventArgs e)
+            => CategoryPlaceholder.Visibility = string.IsNullOrEmpty(CategoryBox.Text)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+        private void OnPickTopLevel(object sender, RoutedEventArgs e)
+        {
+            CategoryPopup.IsOpen = false;
+            CategoryBox.Text = string.Empty;
+            CategoryBox.Focus();
+        }
+
+        private void OnPickCategory(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { DataContext: string category })
+            {
+                return;
+            }
+
+            CategoryPopup.IsOpen = false;
+            CategoryBox.Text = category;
+            CategoryBox.Focus();
+            CategoryBox.CaretIndex = CategoryBox.Text.Length;
         }
 
         private void OnAccept(object sender, RoutedEventArgs e)
         {
             ItemName = NameBox.Text ?? string.Empty;
+            string category = CategoryBox.Text?.Trim() ?? string.Empty;
+            ItemCategory = category;
             Accepted = true;
             Close();
         }
