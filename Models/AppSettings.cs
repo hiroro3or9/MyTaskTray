@@ -8,6 +8,8 @@ namespace MyTaskTray.Models
     /// </summary>
     public class AppSettings
     {
+        public const int CurrentVersion = 2;
+
         /// <summary>
         /// 設定ファイルを読めず、既定値で代用しているかどうか。
         /// この状態のまま保存すると利用者の設定を既定値で上書きしてしまうため、
@@ -17,10 +19,22 @@ namespace MyTaskTray.Models
         public bool IsFallback { get; set; }
 
         /// <summary>設定ファイルのフォーマットバージョン。</summary>
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = CurrentVersion;
 
-        /// <summary>コピー項目。リストの順序がそのままメニューの順序になる。</summary>
+        /// <summary>
+        /// コピー項目。通常は各メニューの明示レイアウトで並べ、
+        /// 旧設定の移行や未知の項目にはこのリスト順をフォールバックとして使う。
+        /// </summary>
         public List<ClipItem> Items { get; set; } = [];
+
+        /// <summary>表示名から独立したカテゴリ定義。</summary>
+        public List<ClipCategory> Categories { get; set; } = [];
+
+        /// <summary>通常メニュー直下の項目・カテゴリ順。</summary>
+        public List<MenuLayoutNode> RegularMenu { get; set; } = [];
+
+        /// <summary>「この内容でできること」直下の項目・カテゴリ順。</summary>
+        public List<MenuLayoutNode> ContextualMenu { get; set; } = [];
 
         /// <summary>コピーしたときに画面右下へ小さな通知を出すかどうか。</summary>
         public bool ShowCopyNotification { get; set; } = true;
@@ -117,6 +131,9 @@ namespace MyTaskTray.Models
             SprintAnchorDate = SprintAnchorDate,
             SprintLengthDays = SprintLengthDays,
             Items = [.. Items.Select(i => i.Clone())],
+            Categories = [.. (Categories ?? []).Select(category => category.Clone())],
+            RegularMenu = [.. (RegularMenu ?? []).Select(node => node.Clone())],
+            ContextualMenu = [.. (ContextualMenu ?? []).Select(node => node.Clone())],
         };
 
         /// <summary>保存済みの指定があれば使い、なければアクション固有の既定値を返す。</summary>

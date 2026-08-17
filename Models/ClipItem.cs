@@ -15,6 +15,7 @@ namespace MyTaskTray.Models
         private string _name = string.Empty;
         private string _text = string.Empty;
         private string _category = string.Empty;
+        private string _categoryId = string.Empty;
         private bool _isSeparator;
         private int _sequenceValue = InitialSequenceValue;
         private int _sequenceStep = 1;
@@ -138,8 +139,8 @@ namespace MyTaskTray.Models
         }
 
         /// <summary>
-        /// 所属カテゴリ。空文字ならトップレベルに表示、
-        /// 値があればその名前のサブメニュー配下に表示する。
+        /// 所属カテゴリの表示名。空文字ならトップレベルに表示する。
+        /// 新形式では <see cref="CategoryId"/> が所属の正本で、この値は互換用の読みやすい控え。
         /// </summary>
         public string Category
         {
@@ -150,6 +151,16 @@ namespace MyTaskTray.Models
                 nameof(Category),
                 nameof(DisplayName),
                 nameof(HasCategory));
+        }
+
+        /// <summary>
+        /// 所属カテゴリの安定した ID。<see cref="Category"/> は旧設定との互換性と
+        /// JSON の読みやすさのために残す表示名で、実際の所属判定にはこちらを使う。
+        /// </summary>
+        public string CategoryId
+        {
+            get => _categoryId;
+            set => Set(ref _categoryId, value ?? string.Empty, nameof(CategoryId), nameof(HasCategory));
         }
 
         /// <summary>true の場合、メニュー上では区切り線として描画する。</summary>
@@ -212,7 +223,8 @@ namespace MyTaskTray.Models
 
         /// <summary>カテゴリが設定されているかどうか（バッジの表示に使う）。</summary>
         [JsonIgnore]
-        public bool HasCategory => !string.IsNullOrWhiteSpace(Category);
+        public bool HasCategory
+            => !string.IsNullOrWhiteSpace(CategoryId) || !string.IsNullOrWhiteSpace(Category);
 
         /// <summary>一覧の 1 行目に出す名前。</summary>
         [JsonIgnore]
@@ -282,6 +294,7 @@ namespace MyTaskTray.Models
             Name = Name,
             Text = Text,
             Category = Category,
+            CategoryId = CategoryId,
             Format = Format,
             IsSeparator = IsSeparator,
             SequenceValue = SequenceValue,

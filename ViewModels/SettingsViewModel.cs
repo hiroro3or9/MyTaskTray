@@ -73,7 +73,8 @@ namespace MyTaskTray.ViewModels
 
         private readonly ICollectionView _itemsView;
         private readonly Dictionary<string, bool> _actionStates;
-        private readonly HashSet<(MenuOutlineSection Section, string Category)> _collapsedCategories = [];
+        private readonly List<ClipCategory> _categories;
+        private readonly HashSet<(MenuOutlineSection Section, string CategoryId)> _collapsedCategories = [];
         private ForegroundApp _appContext;
 
         // 画面上で「次の番号」を直接編集した項目の Id。
@@ -102,6 +103,7 @@ namespace MyTaskTray.ViewModels
         // 途中の不完全な一覧を何度も作らず、操作の最後に 1 度だけアウトラインを更新する。
         private bool _suppressOutlineRebuild;
         private bool _rebuildingOutline;
+        private bool _synchronizingCategories;
 
         // スプリントの設定は入力途中でも打ち直せるよう文字列で持ち、
         // 解釈できたときだけ差し込みに反映する。
@@ -138,7 +140,11 @@ namespace MyTaskTray.ViewModels
             IReadOnlyList<TrayActionDefinition> actions,
             ForegroundApp appContext)
         {
+            SettingsStructure.Normalize(settings);
+            SettingsStructure.ApplyLayoutOrder(settings);
+
             Version = settings.Version;
+            _categories = [.. settings.Categories.Select(category => category.Clone())];
             _appContext = appContext;
             _showCopyNotification = settings.ShowCopyNotification;
             _menuHotKey = settings.MenuHotKey ?? string.Empty;
@@ -655,7 +661,7 @@ namespace MyTaskTray.ViewModels
 
         public int SelectedCategoryItemCount
             => SelectedOutlineRow is { IsCategory: true } row
-                ? Items.Count(item => CategoryEquals(item.Category, row.Category))
+                ? Items.Count(item => string.Equals(item.CategoryId, row.CategoryId, StringComparison.Ordinal))
                 : 0;
 
         public string SelectedCategoryLocation
@@ -1031,12 +1037,13 @@ namespace MyTaskTray.ViewModels
         /// <summary>既存項目のカテゴリを重複なく集めて候補を作り直す。</summary>
         public void RefreshCategories()
         {
-            // 前後の空白の有無で候補が分かれないよう、トリムしてから重複を除く
-            List<string> categories = [.. Items
-                .Select(i => i.Category.Trim())
-                .Where(c => !string.IsNullOrEmpty(c))
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(c => c, StringComparer.CurrentCulture)];
+            List<string> categories = [.. _categories
+                .Where(category => Items.Any(item => string.Equals(
+                    item.CategoryId,
+                    category.Id,
+                    StringComparison.Ordinal)))
+                .Select(category => category.Name)
+                .OrderBy(name => name, StringComparer.CurrentCulture)];
 
             KnownCategories.Clear();
             foreach (string category in categories)
@@ -1058,7 +1065,7 @@ namespace MyTaskTray.ViewModels
                 return;
             }
 
-            (MenuOutlineSection, string) key = (row.Section, row.Category);
+            (MenuOutlineSection, string) key = (row.Section, row.CategoryId);
             if (!_collapsedCategories.Add(key))
             {
                 _collapsedCategories.Remove(key);
@@ -1076,7 +1083,6 @@ namespace MyTaskTray.ViewModels
                 return;
             }
 
-            string oldName = selected.Category;
             string normalized = (newName ?? string.Empty).Trim();
             if (normalized.Length == 0)
             {
@@ -1084,22 +1090,49 @@ namespace MyTaskTray.ViewModels
             }
 
             MenuOutlineSection section = selected.Section;
+            ClipCategory? source = FindCategoryById(selected.CategoryId);
+            if (source is null)
+            {
+                return;
+            }
+
+            ClipCategory? target = _categories.FirstOrDefault(category =>
+                !string.Equals(category.Id, source.Id, StringComparison.Ordinal)
+                && string.Equals(category.Name, normalized, StringComparison.Ordinal));
+            string targetId = target?.Id ?? source.Id;
+
             _suppressOutlineRebuild = true;
+            _synchronizingCategories = true;
             try
             {
-                foreach (ClipItem item in Items.Where(item => CategoryEquals(item.Category, oldName)))
+                if (target is null)
+                {
+                    source.Name = normalized;
+                }
+
+                foreach (ClipItem item in Items.Where(item => string.Equals(
+                    item.CategoryId,
+                    source.Id,
+                    StringComparison.Ordinal)))
                 {
                     item.Category = normalized;
+                    item.CategoryId = targetId;
+                }
+
+                if (target is not null)
+                {
+                    _categories.Remove(source);
                 }
             }
             finally
             {
+                _synchronizingCategories = false;
                 _suppressOutlineRebuild = false;
             }
 
             RefreshCategories();
             RebuildMenuOutline();
-            SelectCategory(section, normalized);
+            SelectCategory(section, targetId);
         }
 
         /// <summary>選択カテゴリをなくし、中の項目をトップレベルへ移す。</summary>
@@ -1110,20 +1143,31 @@ namespace MyTaskTray.ViewModels
                 return;
             }
 
-            string category = selected.Category;
+            string categoryId = selected.CategoryId;
             MenuOutlineSection section = selected.Section;
-            List<ClipItem> affected = [.. Items.Where(item => CategoryEquals(item.Category, category))];
+            List<ClipItem> affected = [.. Items.Where(item => string.Equals(
+                item.CategoryId,
+                categoryId,
+                StringComparison.Ordinal))];
 
             _suppressOutlineRebuild = true;
+            _synchronizingCategories = true;
             try
             {
                 foreach (ClipItem item in affected)
                 {
                     item.Category = string.Empty;
+                    item.CategoryId = string.Empty;
                 }
+
+                _categories.RemoveAll(category => string.Equals(
+                    category.Id,
+                    categoryId,
+                    StringComparison.Ordinal));
             }
             finally
             {
+                _synchronizingCategories = false;
                 _suppressOutlineRebuild = false;
             }
 
@@ -1135,12 +1179,103 @@ namespace MyTaskTray.ViewModels
             SelectedItem = next;
         }
 
-        public bool CategoryExists(string category, string? excluding = null)
+        public bool CategoryExists(string category, string? excludingCategoryId = null)
         {
             string normalized = (category ?? string.Empty).Trim();
             return normalized.Length > 0
-                && Items.Any(item => CategoryEquals(item.Category, normalized)
-                    && (excluding is null || !CategoryEquals(item.Category, excluding)));
+                && _categories.Any(existing => string.Equals(existing.Name, normalized, StringComparison.Ordinal)
+                    && (excludingCategoryId is null
+                        || !string.Equals(existing.Id, excludingCategoryId, StringComparison.Ordinal)));
+        }
+
+        private ClipCategory? FindCategoryById(string? categoryId)
+            => _categories.FirstOrDefault(category => string.Equals(
+                category.Id,
+                categoryId,
+                StringComparison.Ordinal));
+
+        private ClipCategory? FindCategoryByName(string? name)
+        {
+            string normalized = NormalizeCategory(name);
+            return _categories.FirstOrDefault(category => string.Equals(
+                category.Name,
+                normalized,
+                StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 画面で直接編集される旧来の Category 文字列を、保存上の正本である CategoryId へ同期する。
+        /// 入力中の末尾空白は TextBox から消さず、保存時の正規化だけに任せる。
+        /// </summary>
+        private void SynchronizeItemCategory(ClipItem item)
+        {
+            if (_synchronizingCategories)
+            {
+                return;
+            }
+
+            string name = NormalizeCategory(item.Category);
+            ClipCategory? target = null;
+            if (name.Length > 0)
+            {
+                ClipCategory? current = FindCategoryById(item.CategoryId);
+                target = current is not null
+                    && string.Equals(current.Name, name, StringComparison.Ordinal)
+                        ? current
+                        : FindCategoryByName(name);
+                if (target is null)
+                {
+                    target = new ClipCategory
+                    {
+                        Id = ClipCategory.NewId(),
+                        Name = name,
+                    };
+                    _categories.Add(target);
+                }
+            }
+
+            bool previousSuppress = _suppressOutlineRebuild;
+            _synchronizingCategories = true;
+            _suppressOutlineRebuild = true;
+            try
+            {
+                string nextId = target?.Id ?? string.Empty;
+                if (!string.Equals(item.CategoryId, nextId, StringComparison.Ordinal))
+                {
+                    item.CategoryId = nextId;
+                }
+
+                if (name.Length == 0 && item.Category.Length > 0)
+                {
+                    item.Category = string.Empty;
+                }
+            }
+            finally
+            {
+                _suppressOutlineRebuild = previousSuppress;
+                _synchronizingCategories = false;
+            }
+
+            RemoveUnusedCategories();
+        }
+
+        private void SynchronizeAllItemCategories()
+        {
+            foreach (ClipItem item in Items)
+            {
+                SynchronizeItemCategory(item);
+            }
+
+            RemoveUnusedCategories();
+        }
+
+        private void RemoveUnusedCategories()
+        {
+            HashSet<string> used = [.. Items
+                .Select(item => item.CategoryId)
+                .Where(id => id.Length > 0)];
+            _categories.RemoveAll(category => !used.Contains(category.Id));
+            _collapsedCategories.RemoveWhere(entry => !used.Contains(entry.CategoryId));
         }
 
         /// <summary>選択行を、画面に見えている同じ階層の中で上下へ移動する。</summary>
@@ -1154,7 +1289,10 @@ namespace MyTaskTray.ViewModels
             List<OutlineUnit> units = BuildSectionUnits(selected.Section);
             if (selected.IsCategory)
             {
-                int index = units.FindIndex(unit => CategoryEquals(unit.Category, selected.Category));
+                int index = units.FindIndex(unit => string.Equals(
+                    unit.CategoryId,
+                    selected.CategoryId,
+                    StringComparison.Ordinal));
                 int target = index + Math.Sign(offset);
                 if (index < 0 || target < 0 || target >= units.Count)
                 {
@@ -1163,7 +1301,7 @@ namespace MyTaskTray.ViewModels
 
                 (units[index], units[target]) = (units[target], units[index]);
                 ApplySectionOrder(selected.Section, units.SelectMany(unit => unit.Items));
-                SelectCategory(selected.Section, selected.Category);
+                SelectCategory(selected.Section, selected.CategoryId);
                 return;
             }
 
@@ -1172,10 +1310,13 @@ namespace MyTaskTray.ViewModels
                 return;
             }
 
-            if (selected.Category.Length > 0)
+            if (selected.CategoryId.Length > 0)
             {
                 OutlineUnit? categoryUnit = units.FirstOrDefault(
-                    unit => CategoryEquals(unit.Category, selected.Category));
+                    unit => string.Equals(
+                        unit.CategoryId,
+                        selected.CategoryId,
+                        StringComparison.Ordinal));
                 if (categoryUnit is null)
                 {
                     return;
@@ -1222,16 +1363,22 @@ namespace MyTaskTray.ViewModels
 
             if (moving.IsCategory)
             {
-                string targetCategory = target.Category;
-                if (CategoryEquals(moving.Category, targetCategory))
+                string targetCategoryId = target.CategoryId;
+                if (string.Equals(moving.CategoryId, targetCategoryId, StringComparison.Ordinal))
                 {
                     return false;
                 }
 
                 List<OutlineUnit> units = BuildSectionUnits(moving.Section);
-                int from = units.FindIndex(unit => CategoryEquals(unit.Category, moving.Category));
-                int to = targetCategory.Length > 0
-                    ? units.FindIndex(unit => CategoryEquals(unit.Category, targetCategory))
+                int from = units.FindIndex(unit => string.Equals(
+                    unit.CategoryId,
+                    moving.CategoryId,
+                    StringComparison.Ordinal));
+                int to = targetCategoryId.Length > 0
+                    ? units.FindIndex(unit => string.Equals(
+                        unit.CategoryId,
+                        targetCategoryId,
+                        StringComparison.Ordinal))
                     : units.FindIndex(unit => target.Item is not null
                         && unit.Items.Count == 1
                         && ReferenceEquals(unit.Items[0], target.Item));
@@ -1254,7 +1401,7 @@ namespace MyTaskTray.ViewModels
 
                 units.Insert(Math.Clamp(to, 0, units.Count), unit);
                 ApplySectionOrder(moving.Section, units.SelectMany(entry => entry.Items));
-                SelectCategory(moving.Section, moving.Category);
+                SelectCategory(moving.Section, moving.CategoryId);
                 return true;
             }
 
@@ -1263,11 +1410,14 @@ namespace MyTaskTray.ViewModels
                 return false;
             }
 
+            string destinationCategoryId = target.CategoryId;
             string destinationCategory = target.Category;
 
             _suppressOutlineRebuild = true;
+            _synchronizingCategories = true;
             try
             {
+                movingItem.CategoryId = destinationCategoryId;
                 movingItem.Category = destinationCategory;
 
                 List<ClipItem> ordered = BuildSectionUnits(moving.Section)
@@ -1292,7 +1442,10 @@ namespace MyTaskTray.ViewModels
                 else
                 {
                     int lastInCategory = ordered.FindLastIndex(
-                        item => CategoryEquals(item.Category, destinationCategory));
+                        item => string.Equals(
+                            item.CategoryId,
+                            destinationCategoryId,
+                            StringComparison.Ordinal));
                     insertAt = lastInCategory + 1;
                 }
 
@@ -1301,9 +1454,11 @@ namespace MyTaskTray.ViewModels
             }
             finally
             {
+                _synchronizingCategories = false;
                 _suppressOutlineRebuild = false;
             }
 
+            RemoveUnusedCategories();
             RefreshCategories();
             RebuildMenuOutline();
             SelectedItem = movingItem;
@@ -1314,8 +1469,8 @@ namespace MyTaskTray.ViewModels
         {
             ClipItem? selectedItem = SelectedItem;
             MenuOutlineSection? selectedSection = _selectedOutlineRow?.Section;
-            string selectedCategory = _selectedOutlineRow?.IsCategory == true
-                ? _selectedOutlineRow.Category
+            string selectedCategoryId = _selectedOutlineRow?.IsCategory == true
+                ? _selectedOutlineRow.CategoryId
                 : string.Empty;
 
             _rebuildingOutline = true;
@@ -1332,10 +1487,13 @@ namespace MyTaskTray.ViewModels
 
             MenuOutlineRow? nextSelection = selectedItem is not null
                 ? MenuOutline.FirstOrDefault(row => ReferenceEquals(row.Item, selectedItem))
-                : selectedCategory.Length > 0 && selectedSection is { } section
+                : selectedCategoryId.Length > 0 && selectedSection is { } section
                     ? MenuOutline.FirstOrDefault(row => row.IsCategory
                         && row.Section == section
-                        && CategoryEquals(row.Category, selectedCategory))
+                        && string.Equals(
+                            row.CategoryId,
+                            selectedCategoryId,
+                            StringComparison.Ordinal))
                     : null;
 
             if (!ReferenceEquals(_selectedOutlineRow, nextSelection))
@@ -1369,23 +1527,33 @@ namespace MyTaskTray.ViewModels
             HashSet<string> emittedCategories = new(StringComparer.Ordinal);
             foreach (ClipItem item in sectionItems)
             {
-                string category = NormalizeCategory(item.Category);
-                if (category.Length == 0)
+                string categoryId = item.CategoryId;
+                if (categoryId.Length == 0)
                 {
-                    MenuOutline.Add(MenuOutlineRow.CreateItem(section, item, string.Empty));
+                    MenuOutline.Add(MenuOutlineRow.CreateItem(
+                        section,
+                        item,
+                        string.Empty,
+                        string.Empty));
                     continue;
                 }
 
-                if (!emittedCategories.Add(category))
+                if (!emittedCategories.Add(categoryId))
                 {
                     continue;
                 }
 
+                string category = FindCategoryById(categoryId)?.Name
+                    ?? NormalizeCategory(item.Category);
                 List<ClipItem> children = [.. sectionItems
-                    .Where(candidate => CategoryEquals(candidate.Category, category))];
-                bool expanded = HasFilter || !_collapsedCategories.Contains((section, category));
+                    .Where(candidate => string.Equals(
+                        candidate.CategoryId,
+                        categoryId,
+                        StringComparison.Ordinal))];
+                bool expanded = HasFilter || !_collapsedCategories.Contains((section, categoryId));
                 MenuOutline.Add(MenuOutlineRow.CreateCategory(
                     section,
+                    categoryId,
                     category,
                     children.Count,
                     expanded));
@@ -1397,7 +1565,11 @@ namespace MyTaskTray.ViewModels
 
                 foreach (ClipItem child in children)
                 {
-                    MenuOutline.Add(MenuOutlineRow.CreateItem(section, child, category));
+                    MenuOutline.Add(MenuOutlineRow.CreateItem(
+                        section,
+                        child,
+                        categoryId,
+                        category));
                 }
             }
         }
@@ -1407,9 +1579,9 @@ namespace MyTaskTray.ViewModels
             MenuOutlineRow? row = item is null
                 ? null
                 : MenuOutline.FirstOrDefault(candidate => ReferenceEquals(candidate.Item, item));
-            if (row is null && item is not null && NormalizeCategory(item.Category).Length > 0 && !HasFilter)
+            if (row is null && item is not null && item.CategoryId.Length > 0 && !HasFilter)
             {
-                _collapsedCategories.Remove((GetSection(item), NormalizeCategory(item.Category)));
+                _collapsedCategories.Remove((GetSection(item), item.CategoryId));
                 RebuildMenuOutline();
                 row = MenuOutline.FirstOrDefault(candidate => ReferenceEquals(candidate.Item, item));
             }
@@ -1423,11 +1595,11 @@ namespace MyTaskTray.ViewModels
             OnPropertyChanged(nameof(SelectedOutlineRow));
         }
 
-        private void SelectCategory(MenuOutlineSection section, string category)
+        private void SelectCategory(MenuOutlineSection section, string categoryId)
         {
             SelectedOutlineRow = MenuOutline.FirstOrDefault(row => row.IsCategory
                 && row.Section == section
-                && CategoryEquals(row.Category, category));
+                && string.Equals(row.CategoryId, categoryId, StringComparison.Ordinal));
         }
 
         private List<OutlineUnit> BuildSectionUnits(MenuOutlineSection section)
@@ -1438,17 +1610,19 @@ namespace MyTaskTray.ViewModels
 
             foreach (ClipItem item in sectionItems)
             {
-                string category = NormalizeCategory(item.Category);
-                if (category.Length == 0)
+                string categoryId = item.CategoryId;
+                if (categoryId.Length == 0)
                 {
-                    units.Add(new OutlineUnit(string.Empty, [item]));
+                    units.Add(new OutlineUnit(string.Empty, string.Empty, [item]));
                     continue;
                 }
 
-                if (!categories.TryGetValue(category, out OutlineUnit? unit))
+                if (!categories.TryGetValue(categoryId, out OutlineUnit? unit))
                 {
-                    unit = new OutlineUnit(category, []);
-                    categories.Add(category, unit);
+                    string category = FindCategoryById(categoryId)?.Name
+                        ?? NormalizeCategory(item.Category);
+                    unit = new OutlineUnit(categoryId, category, []);
+                    categories.Add(categoryId, unit);
                     units.Add(unit);
                 }
 
@@ -1507,32 +1681,39 @@ namespace MyTaskTray.ViewModels
 
         private static string NormalizeCategory(string? category) => (category ?? string.Empty).Trim();
 
-        private static bool CategoryEquals(string? left, string? right)
-            => string.Equals(NormalizeCategory(left), NormalizeCategory(right), StringComparison.Ordinal);
-
-        private sealed record OutlineUnit(string Category, List<ClipItem> Items);
+        private sealed record OutlineUnit(
+            string CategoryId,
+            string Category,
+            List<ClipItem> Items);
 
         /// <summary>
         /// 保存用の設定オブジェクトを作る。ホットキーとスプリントは保存前に検証済みの値を受け取る。
         /// </summary>
         public AppSettings ToSettings(string normalizedMenuHotKey, SprintSchedule? validatedSprint)
         {
+            SynchronizeAllItemCategories();
+
             Dictionary<string, bool> actionStates = new(_actionStates, StringComparer.Ordinal);
             foreach (ActionSettingRow action in ActionSettings)
             {
                 actionStates[action.Id] = action.IsVisible;
             }
 
-            return new()
+            AppSettings result = new()
             {
-                Version = Version,
+                Version = AppSettings.CurrentVersion,
                 ShowCopyNotification = ShowCopyNotification,
                 MenuHotKey = normalizedMenuHotKey,
                 ActionStates = actionStates,
                 SprintAnchorDate = validatedSprint?.AnchorDate,
                 SprintLengthDays = validatedSprint?.LengthDays ?? 14,
+                Categories = [.. _categories.Select(category => category.Clone())],
                 Items = [.. Items.Select(i => i.Clone())],
             };
+            result.RegularMenu = SettingsStructure.BuildLayout(result.Items, contextual: false);
+            result.ContextualMenu = SettingsStructure.BuildLayout(result.Items, contextual: true);
+            SettingsStructure.Normalize(result);
+            return result;
         }
 
         /// <summary>保存が完了したことを伝える。</summary>
@@ -1614,6 +1795,7 @@ namespace MyTaskTray.ViewModels
             // Reset（Clear など）では OldItems / NewItems が渡されないため、
             // 差分ではなく購読し直す。項目数はたかだか数十なのでコストは問題にならない。
             ResubscribeItems();
+            SynchronizeAllItemCategories();
 
             IsDirty = true;
             OnPropertyChanged(nameof(StatusText));
@@ -1643,11 +1825,19 @@ namespace MyTaskTray.ViewModels
 
         private void OnAnyItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
+            if (e.PropertyName == nameof(ClipItem.Category)
+                && sender is ClipItem categoryItem
+                && !_synchronizingCategories)
+            {
+                SynchronizeItemCategory(categoryItem);
+            }
+
             switch (e.PropertyName)
             {
                 case nameof(ClipItem.Name):
                 case nameof(ClipItem.Text):
                 case nameof(ClipItem.Category):
+                case nameof(ClipItem.CategoryId):
                 case nameof(ClipItem.IsSeparator):
                 case nameof(ClipItem.ClipboardCondition):
                 case nameof(ClipItem.ClipboardPattern):
@@ -1684,7 +1874,7 @@ namespace MyTaskTray.ViewModels
                     break;
             }
 
-            if (e.PropertyName == nameof(ClipItem.Category))
+            if (e.PropertyName is nameof(ClipItem.Category) or nameof(ClipItem.CategoryId))
             {
                 if (!_suppressOutlineRebuild)
                 {
@@ -1693,6 +1883,7 @@ namespace MyTaskTray.ViewModels
             }
 
             bool affectsOutline = e.PropertyName is nameof(ClipItem.Category)
+                or nameof(ClipItem.CategoryId)
                 or nameof(ClipItem.IsSeparator)
                 or nameof(ClipItem.ClipboardCondition)
                 || (HasFilter && e.PropertyName is nameof(ClipItem.Name)

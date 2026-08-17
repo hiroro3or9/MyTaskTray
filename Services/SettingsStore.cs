@@ -47,7 +47,7 @@ namespace MyTaskTray.Services
             if (!File.Exists(filePath))
             {
                 AppSettings created = AppSettings.CreateDefault();
-                EnsureIds(created);
+                SettingsStructure.Normalize(created);
 
                 try
                 {
@@ -98,9 +98,9 @@ namespace MyTaskTray.Services
                 return BackupAndCreateDefault(filePath);
             }
 
-            // 手で書き足した項目には Id が無い。ここで採番して書き戻しておかないと、
-            // 読むたびに別の Id になり、連番の引き継ぎ（Id での突き合わせ）が働かない
-            if (EnsureIds(loaded))
+            // 手で書き足した項目の ID、旧形式のカテゴリ名、新しいレイアウトを整える。
+            // 書き戻しておかないと読むたびに別 ID になり、配置や連番の突き合わせが働かない。
+            if (SettingsStructure.Normalize(loaded))
             {
                 try
                 {
@@ -123,7 +123,7 @@ namespace MyTaskTray.Services
         private static AppSettings BackupAndCreateDefault(string filePath)
         {
             AppSettings created = AppSettings.CreateDefault();
-            EnsureIds(created);
+            SettingsStructure.Normalize(created);
 
             // 元の内容を取り戻せる状態にできなければ、既定値で上書きしてはいけない
             if (!TryBackupBrokenFile(filePath))
@@ -170,29 +170,14 @@ namespace MyTaskTray.Services
             return null;
         }
 
-        /// <summary>Id が空の項目に採番する。1 件でも採番したら true。</summary>
-        private static bool EnsureIds(AppSettings settings)
-        {
-            bool assigned = false;
-
-            foreach (ClipItem item in settings.Items)
-            {
-                if (string.IsNullOrEmpty(item.Id))
-                {
-                    item.Id = ClipItem.NewId();
-                    assigned = true;
-                }
-            }
-
-            return assigned;
-        }
-
         /// <summary>設定を保存する。書き込みは一時ファイル経由で行い、破損を避ける。</summary>
         public static void Save(AppSettings settings) => Save(settings, FilePath);
 
         /// <summary>指定パスへ設定を保存する。一時ファイル経由の置き換え規則は公開経路と同じ。</summary>
         internal static void Save(AppSettings settings, string filePath)
         {
+            SettingsStructure.Normalize(settings);
+
             string directoryPath = Path.GetDirectoryName(filePath)
                 ?? throw new ArgumentException("設定ファイルの保存先フォルダーを特定できません。", nameof(filePath));
             Directory.CreateDirectory(directoryPath);

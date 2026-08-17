@@ -26,6 +26,7 @@ namespace MyTaskTray.ViewModels
         private MenuOutlineRow(
             MenuOutlineRowKind kind,
             MenuOutlineSection section,
+            string categoryId,
             string category,
             ClipItem? item,
             int itemCount,
@@ -33,6 +34,7 @@ namespace MyTaskTray.ViewModels
         {
             Kind = kind;
             Section = section;
+            CategoryId = categoryId;
             Category = category;
             Item = item;
             ItemCount = itemCount;
@@ -42,6 +44,8 @@ namespace MyTaskTray.ViewModels
         public MenuOutlineRowKind Kind { get; }
 
         public MenuOutlineSection Section { get; }
+
+        public string CategoryId { get; }
 
         public string Category { get; }
 
@@ -72,19 +76,21 @@ namespace MyTaskTray.ViewModels
         public string ExpandGlyph => IsExpanded ? "▾" : "▸";
 
         public static MenuOutlineRow CreateSection(MenuOutlineSection section)
-            => new(MenuOutlineRowKind.Section, section, string.Empty, null, 0, true);
+            => new(MenuOutlineRowKind.Section, section, string.Empty, string.Empty, null, 0, true);
 
         public static MenuOutlineRow CreateCategory(
             MenuOutlineSection section,
+            string categoryId,
             string category,
             int itemCount,
             bool isExpanded)
-            => new(MenuOutlineRowKind.Category, section, category, null, itemCount, isExpanded);
+            => new(MenuOutlineRowKind.Category, section, categoryId, category, null, itemCount, isExpanded);
 
         public static MenuOutlineRow CreateItem(
             MenuOutlineSection section,
             ClipItem item,
+            string categoryId,
             string category)
-            => new(MenuOutlineRowKind.Item, section, category, item, 0, true);
+            => new(MenuOutlineRowKind.Item, section, categoryId, category, item, 0, true);
     }
 }

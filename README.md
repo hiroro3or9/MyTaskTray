@@ -100,11 +100,14 @@ JSON の入力ではコメントと末尾カンマも受け付けますが、出
 ### カテゴリ（サブメニュー）
 
 「配置先」に名前を入れると、その名前のサブメニュー配下にまとまります。空欄ならトップレベルに表示されます。
-同じカテゴリ名の項目は、最初にそのカテゴリが登場した位置のサブメニューにまとめられます。
 設定画面ではカテゴリが見出しとして表示され、折りたたみ、ドラッグによる並べ替え、名前の一括変更ができます。
 カテゴリを削除しても中の項目は削除されず、トップレベルへ移ります。
 項目編集欄の「配置先」へ新しい名前を直接入力すると、新しいカテゴリを作れます。
 右の「▾」から既存カテゴリまたはトップレベルを選ぶこともできます。
+
+カテゴリには表示名とは別の固定IDがあり、名前を変えても所属と並び順は保たれます。
+通常メニューと「この内容でできること」はそれぞれ独立した配置順を持つため、
+同じカテゴリを両方で使っても、各領域で好きな位置へ並べられます。
 
 ## クリップボードをその場で項目にする
 
@@ -856,7 +859,7 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 
 ```json
 {
-  "Version": 1,
+  "Version": 2,
   "ShowCopyNotification": true,
   "MenuHotKey": "Ctrl+Alt+V",
   "ActionStates": {
@@ -867,12 +870,34 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
   },
   "SprintAnchorDate": "2026-04-06T00:00:00",
   "SprintLengthDays": 14,
+  "Categories": [
+    { "Id": "category-date", "Name": "日付" }
+  ],
+  "RegularMenu": [
+    {
+      "Kind": "Item",
+      "Id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "Children": []
+    },
+    {
+      "Kind": "Item",
+      "Id": "separator-1",
+      "Children": []
+    },
+    {
+      "Kind": "Category",
+      "Id": "category-date",
+      "Children": ["date-item-1"]
+    }
+  ],
+  "ContextualMenu": [],
   "Items": [
     {
       "Id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
       "Name": "メールアドレス",
       "Text": "example@example.com",
       "Category": "",
+      "CategoryId": "",
       "IsSeparator": false,
       "ClipboardCondition": "Always",
       "ClipboardPattern": "",
@@ -881,8 +906,22 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
       "SequenceValue": 1,
       "SequenceStep": 1
     },
-    { "Name": "", "Text": "", "Category": "", "IsSeparator": true },
-    { "Name": "今日", "Text": "{date:yyyy/MM/dd}", "Category": "日付", "IsSeparator": false }
+    {
+      "Id": "separator-1",
+      "Name": "",
+      "Text": "",
+      "Category": "",
+      "CategoryId": "",
+      "IsSeparator": true
+    },
+    {
+      "Id": "date-item-1",
+      "Name": "今日",
+      "Text": "{date:yyyy/MM/dd}",
+      "Category": "日付",
+      "CategoryId": "category-date",
+      "IsSeparator": false
+    }
   ]
 }
 ```
@@ -894,10 +933,14 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 | `ActionStates` | 組み込みアクションの ID と表示状態。記載がないアクションは、そのアクションの既定値を使う |
 | `SprintAnchorDate` | スプリントの基準日。`null` なら `@sprint` を使った差し込みは展開されない |
 | `SprintLengthDays` | スプリント 1 つの日数（既定は `14`） |
+| `Categories` | カテゴリ定義。`Id` は固定ID、`Name` は画面とメニューに出す名前 |
+| `RegularMenu` | 通常メニュー直下の項目・カテゴリ順。カテゴリの `Children` は配下の項目ID順 |
+| `ContextualMenu` | 「この内容でできること」内の項目・カテゴリ順 |
 | `Id` | 項目の識別子（自動生成。連番の引き継ぎに使用） |
 | `Name` | メニューに表示する名前（空ならコピー文字列を表示） |
 | `Text` | クリップボードにコピーする文字列（改行・差し込み可） |
-| `Category` | サブメニュー名。空ならトップレベル |
+| `CategoryId` | 所属カテゴリの固定ID。空ならトップレベル |
+| `Category` | 互換性と手編集時の読みやすさのために保存するカテゴリ名 |
 | `IsSeparator` | `true` で区切り線として表示 |
 | `Format` | コピーするときの形式。`Plain` / `Markdown` / `Html`（既定は `Plain`） |
 | `ClipboardCondition` | スマートアクションの表示条件。`Always` / `HasText` / `Date` / `Url` / `Number` / `Json` / `FilePath` / `Email` / `Regex` |
@@ -916,6 +959,7 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
 メニューから「設定...」を選ぶと読み直しを試みるので、しばらく待ってからもう一度お試しください。
 
 `Id` を書かずに項目を足した場合は、次回の読み込み時に自動で採番して書き戻します。
+Version 1 のように `Category` だけを持つ旧設定も、カテゴリIDと配置へ自動移行して書き戻します。
 
 ## 仕様メモ
 

@@ -793,6 +793,10 @@ namespace MyTaskTray
                 }
             }
 
+            // 表示条件で一部の項目が抜けても、残った項目は保存済みのメニュー配置順を保つ。
+            regular = OrderEntriesByLayout(regular, _settings.RegularMenu);
+            smart = OrderEntriesByLayout(smart, _settings.ContextualMenu);
+
             if (smart.Count > 0 || contextualActions.Count > 0)
             {
                 ToolStripMenuItem smartParent = new("この内容でできること")
@@ -1324,8 +1328,40 @@ namespace MyTaskTray
         }
 
         /// <summary>
-        /// 設定の項目順を保ちながら、カテゴリごとにサブメニューへ振り分ける。
-        /// 同じカテゴリが離れた位置に現れても、最初に登場した位置のサブメニューにまとめる。
+        /// 明示的なメニュー配置に従い、現在表示できる項目だけを同じ相対順で並べる。
+        /// 未知の項目は後方へ残すため、手編集された古い設定でも項目を失わない。
+        /// </summary>
+        private static List<MenuEntry> OrderEntriesByLayout(
+            IEnumerable<MenuEntry> entries,
+            IReadOnlyList<MenuLayoutNode> layout)
+        {
+            List<MenuEntry> source = [.. entries];
+            Dictionary<string, MenuEntry> byId = source.ToDictionary(
+                entry => entry.Item.Id,
+                StringComparer.Ordinal);
+            HashSet<string> used = new(StringComparer.Ordinal);
+            List<MenuEntry> result = [];
+
+            foreach (MenuLayoutNode node in layout)
+            {
+                IEnumerable<string> ids = node.Kind == MenuLayoutNodeKind.Item
+                    ? [node.Id]
+                    : node.Children;
+                foreach (string id in ids)
+                {
+                    if (byId.TryGetValue(id, out MenuEntry entry) && used.Add(id))
+                    {
+                        result.Add(entry);
+                    }
+                }
+            }
+
+            result.AddRange(source.Where(entry => used.Add(entry.Item.Id)));
+            return result;
+        }
+
+        /// <summary>
+        /// 配置順を保ちながら、同じカテゴリ ID の項目をサブメニューへ振り分ける。
         /// </summary>
         private void BuildClipItems(
             ToolStripItemCollection target,
@@ -1370,9 +1406,14 @@ namespace MyTaskTray
                         menuEntry.AppContext,
                         enabled);
 
-                // 「日付」と「日付 」（末尾に空白）が別のサブメニューになってしまわないよう、
-                // 見た目で区別できない前後の空白は無視して同じカテゴリとして扱う
-                string category = item.Category.Trim();
+                string categoryId = item.CategoryId.Trim();
+                string category = categoryId.Length > 0
+                    ? _settings.Categories.FirstOrDefault(candidate => string.Equals(
+                        candidate.Id,
+                        categoryId,
+                        StringComparison.Ordinal))?.Name ?? item.Category.Trim()
+                    : item.Category.Trim();
+                string categoryKey = categoryId.Length > 0 ? categoryId : category;
 
                 if (string.IsNullOrEmpty(category))
                 {
@@ -1385,7 +1426,7 @@ namespace MyTaskTray
                     continue;
                 }
 
-                if (!categories.TryGetValue(category, out ToolStripMenuItem? parent))
+                if (!categories.TryGetValue(categoryKey, out ToolStripMenuItem? parent))
                 {
                     parent = new ToolStripMenuItem(EscapeAmpersand(category))
                     {
@@ -1399,7 +1440,7 @@ namespace MyTaskTray
                         dropDownMenu.ShowImageMargin = false;
                     }
 
-                    categories[category] = parent;
+                    categories[categoryKey] = parent;
                     target.Add(parent);
                     numbered.Add(parent);
                 }
@@ -1513,7 +1554,7 @@ namespace MyTaskTray
         /// サブメニューは開いた時点で 1 から振り直される。
         ///
         /// 番号は表示順に振る（並べ替えると番号も変わる）。
-        /// これは「一覧の並び順がそのままメニューの順序になる」という既存の考え方と揃えている。
+        /// これは設定画面で作った明示的なメニュー配置順と揃えている。
         /// 11 個目以降には振らない。矢印キーで選ぶ。
         /// </summary>
         /// <returns>
@@ -2659,10 +2700,8 @@ namespace MyTaskTray
             }
 
             IReadOnlyList<string> categories = _settingsWindow?.GetKnownCategories()
-                ?? [.. _settings.Items
-                    .Select(item => item.Category.Trim())
-                    .Where(category => category.Length > 0)
-                    .Distinct(StringComparer.Ordinal)
+                ?? [.. _settings.Categories
+                    .Select(category => category.Name)
                     .OrderBy(category => category, StringComparer.CurrentCulture)];
             string initialCategory = categories.Contains(_lastQuickAddCategory, StringComparer.Ordinal)
                 ? _lastQuickAddCategory

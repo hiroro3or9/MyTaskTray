@@ -179,6 +179,7 @@ namespace MyTaskTray
                 Name = "新しい項目",
                 Text = string.Empty,
                 Category = location?.Category ?? _vm.SelectedItem?.Category ?? string.Empty,
+                CategoryId = location?.CategoryId ?? _vm.SelectedItem?.CategoryId ?? string.Empty,
                 ClipboardCondition = location?.Section == MenuOutlineSection.Contextual
                     ? ClipboardMatchKind.HasText
                     : ClipboardMatchKind.Always,
@@ -288,8 +289,8 @@ namespace MyTaskTray
                         : !candidate.IsSeparator && candidate.ClipboardCondition != ClipboardMatchKind.Always;
                     if (sameSection
                         && string.Equals(
-                            candidate.Category.Trim(),
-                            category.Category,
+                            candidate.CategoryId,
+                            category.CategoryId,
                             StringComparison.Ordinal))
                     {
                         last = i;
@@ -394,7 +395,10 @@ namespace MyTaskTray
                 && target.Section == _draggingRow.Section
                 && !ReferenceEquals(target, _draggingRow)
                 && !(_draggingRow.IsCategory
-                    && string.Equals(_draggingRow.Category, target.Category, StringComparison.Ordinal)))
+                    && string.Equals(
+                        _draggingRow.CategoryId,
+                        target.CategoryId,
+                        StringComparison.Ordinal)))
             {
                 bool below = e.GetPosition(container).Y > container.ActualHeight / 2;
                 SetDropIndicator(container, below ? DropPosition.Below : DropPosition.Above);
@@ -589,7 +593,7 @@ namespace MyTaskTray
                 return;
             }
 
-            if (_vm.CategoryExists(next, selected.Category))
+            if (_vm.CategoryExists(next, selected.CategoryId))
             {
                 MessageBoxResult answer = MessageBox.Show(
                     $"「{next}」はすでにあります。2つのカテゴリをまとめますか？",

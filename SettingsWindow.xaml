@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:MyTaskTray"
         Title="MyTaskTray の設定"
-        Height="680" Width="980"
+        Height="800" Width="980"
         MinHeight="560" MinWidth="840"
         WindowStartupLocation="CenterScreen"
         FontFamily="Yu Gothic UI" FontSize="13"
