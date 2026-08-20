@@ -40,6 +40,20 @@ namespace MyTaskTray.Models
         public bool ShowCopyNotification { get; set; } = true;
 
         /// <summary>
+        /// 連続コピーが 1 件として集める、クリップボード更新の範囲。
+        ///
+        /// <para>
+        /// 既定は「操作した直後」で、これは従来（Ctrl+C のみ）と異なる。
+        /// この項目を持たない設定ファイルを読んでも既定値が入るため、
+        /// 連続コピーの集まり方だけは以前と変わる。
+        /// 取りこぼしのほうが実害が大きいと判断した（DESIGN_COPY_INTENT.md §8-1）。
+        /// 従来の挙動は <see cref="Models.SequentialCaptureTrigger.CopyKey"/> で選べる。
+        /// </para>
+        /// </summary>
+        public SequentialCaptureTrigger SequentialCaptureTrigger { get; set; }
+            = SequentialCaptureTrigger.UserInput;
+
+        /// <summary>
         /// トレイメニューをカーソル位置へ表示するグローバルホットキー。
         /// 空文字なら登録しない。既定で他アプリのキーを奪わないよう、初期値は空にする。
         /// </summary>
@@ -126,6 +140,7 @@ namespace MyTaskTray.Models
         {
             Version = Version,
             ShowCopyNotification = ShowCopyNotification,
+            SequentialCaptureTrigger = SequentialCaptureTrigger,
             MenuHotKey = MenuHotKey,
             ActionStates = new(ActionStates ?? [], StringComparer.Ordinal),
             SprintAnchorDate = SprintAnchorDate,

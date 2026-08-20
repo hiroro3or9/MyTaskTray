@@ -1030,7 +1030,7 @@ namespace MyTaskTray
                         $"連続コピー: {sequential.CapturedCount} 件を収集中")
                     {
                         Enabled = false,
-                        ToolTipText = "A でデータを順番にコピーしてください。B で最初の Ctrl+V を押すと収集を終えます",
+                        ToolTipText = $"{DescribeCaptureAction()}てください。B で最初の Ctrl+V を押すと収集を終えます",
                     });
 
                     ToolStripMenuItem beginPasting = new("収集を終えて貼り付けへ(&P)")
@@ -1099,6 +1099,7 @@ namespace MyTaskTray
             try
             {
                 session = new SequentialCopyPasteSession(
+                    trigger: _settings.SequentialCaptureTrigger,
                     captured: (value, count) =>
                     {
                         if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
@@ -1114,16 +1115,29 @@ namespace MyTaskTray
                                 TemplateEngine.ToSingleLine(value, 100));
                         }
                     },
-                    captureRejected: () =>
+                    captureRejected: reason =>
                     {
                         if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
                         {
                             return;
                         }
 
-                        ToastWindow.ShowToast(
-                            "連続コピーに追加できません",
-                            "文字列をコピーしてください。空またはテキスト以外の内容は追加されません");
+                        // 理由ごとに文面を変える。「文字列をコピーしてください」だけでは、
+                        // 保存を拒まれた場合に何が起きたのか分からない。
+                        (string title, string body) = reason switch
+                        {
+                            SequentialCaptureRejection.MonitoringExcluded => (
+                                "連続コピーに追加できません",
+                                "コピー元が、他のアプリでの保存を許可していません（パスワード管理ソフトなど）"),
+                            SequentialCaptureRejection.NothingCaptured => (
+                                "まだ貼り付けるものがありません",
+                                $"{DescribeCaptureAction()}、内容を集めてください"),
+                            _ => (
+                                "連続コピーに追加できません",
+                                "文字列をコピーしてください。空またはテキスト以外の内容は追加されません"),
+                        };
+
+                        ToastWindow.ShowToast(title, body);
                     },
                     pasted: progress =>
                     {
@@ -1211,7 +1225,27 @@ namespace MyTaskTray
             RebuildMenu();
             ToastWindow.ShowToast(
                 "連続コピーを開始しました",
-                "A でデータを順番に Ctrl+C し、B で Ctrl+V を繰り返してください");
+                $"{DescribeCaptureAction()}、B で Ctrl+V を繰り返してください");
+        }
+
+        /// <summary>
+        /// 収集の設定に合わせた、集める操作の案内。
+        /// Ctrl+C 限定のときだけキーを明示する。それ以外では
+        /// 右クリックの「コピー」やアプリのコピーボタンでも集まるため、
+        /// キーを書くとかえって狭く伝わる。
+        /// </summary>
+        private string DescribeCaptureAction()
+        {
+            // 実行中のセッションは開始時の設定で動いている。
+            // 途中で設定を変えられても、案内と実際の動きがずれないようにする。
+            SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            SequentialCaptureTrigger trigger =
+                session?.Trigger ?? _settings.SequentialCaptureTrigger;
+
+            return trigger == SequentialCaptureTrigger.CopyKey
+                ? "A でデータを順番に Ctrl+C し"
+                : "A でデータを順番にコピーし";
         }
 
         private void BeginSequentialPasting()

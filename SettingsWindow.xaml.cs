@@ -512,6 +512,11 @@ namespace MyTaskTray
             ActionSettingsPopup.IsOpen = true;
         }
 
+        private void OnOpenSequentialCaptureSettings(object sender, RoutedEventArgs e)
+        {
+            SequentialCapturePopup.IsOpen = true;
+        }
+
         // ==================================================================
         // 差し込みの挿入
         // ==================================================================
@@ -748,6 +753,7 @@ namespace MyTaskTray
             HotKeyPopup.IsOpen = false;
             SprintPopup.IsOpen = false;
             ActionSettingsPopup.IsOpen = false;
+            SequentialCapturePopup.IsOpen = false;
             e.Handled = true;
         }
 
@@ -1110,7 +1116,8 @@ namespace MyTaskTray
             // ここで拾わないと IsCancel のキャンセルボタンが反応して設定画面ごと閉じてしまう。
             if (e.Key == Key.Escape
                 && (InsertPopup.IsOpen || CategoryPopup.IsOpen || AppPopup.IsOpen
-                    || HotKeyPopup.IsOpen || SprintPopup.IsOpen || ActionSettingsPopup.IsOpen))
+                    || HotKeyPopup.IsOpen || SprintPopup.IsOpen || ActionSettingsPopup.IsOpen
+                    || SequentialCapturePopup.IsOpen))
             {
                 InsertPopup.IsOpen = false;
                 CategoryPopup.IsOpen = false;
@@ -1118,6 +1125,7 @@ namespace MyTaskTray
                 HotKeyPopup.IsOpen = false;
                 SprintPopup.IsOpen = false;
                 ActionSettingsPopup.IsOpen = false;
+                SequentialCapturePopup.IsOpen = false;
                 e.Handled = true;
                 return;
             }

@@ -20,6 +20,12 @@ namespace MyTaskTray.ViewModels
         string Name,
         string Description);
 
+    /// <summary>連続コピーが 1 件として集める範囲の選択肢。</summary>
+    public sealed record SequentialCaptureOption(
+        SequentialCaptureTrigger Trigger,
+        string Name,
+        string Description);
+
     /// <summary>設定画面に表示する、組み込みアクション 1 件の表示設定。</summary>
     public sealed class ActionSettingRow : INotifyPropertyChanged
     {
@@ -91,6 +97,7 @@ namespace MyTaskTray.ViewModels
         private string _categoryNameDraft = string.Empty;
         private string _filterText = string.Empty;
         private bool _showCopyNotification;
+        private SequentialCaptureTrigger _sequentialCaptureTrigger;
         private string _menuHotKey = string.Empty;
         private bool _isDirty;
 
@@ -147,6 +154,7 @@ namespace MyTaskTray.ViewModels
             _categories = [.. settings.Categories.Select(category => category.Clone())];
             _appContext = appContext;
             _showCopyNotification = settings.ShowCopyNotification;
+            _sequentialCaptureTrigger = settings.SequentialCaptureTrigger;
             _menuHotKey = settings.MenuHotKey ?? string.Empty;
             _actionStates = new(settings.ActionStates ?? [], StringComparer.Ordinal);
             _sprintAnchorText = settings.SprintAnchorDate?.ToString(SprintDateFormat, CultureInfo.InvariantCulture)
@@ -217,6 +225,25 @@ namespace MyTaskTray.ViewModels
                         + "改行を書いても Word や Slack では行が変わりません（<br> や <p> が要ります）。"
                         + "「- 」で箇条書きにしたい場合は Markdown を選んでください。"),
             ];
+            SequentialCaptureOptions =
+            [
+                new(
+                    SequentialCaptureTrigger.UserInput,
+                    "操作した直後のコピー",
+                    "キーやマウスを操作した直後にクリップボードが変わったら集めます。"
+                        + "右クリックの「コピー」やアプリのコピーボタンも集まります。"
+                        + "常駐している他のアプリが自動で書き換えた内容は集めません。"),
+                new(
+                    SequentialCaptureTrigger.CopyKey,
+                    "Ctrl+C のときだけ",
+                    "Ctrl+C や Ctrl+X を押した直後だけ集めます。最も確実ですが、"
+                        + "右クリックの「コピー」やアプリのコピーボタンは集まりません。"),
+                new(
+                    SequentialCaptureTrigger.Any,
+                    "変わったときは常に",
+                    "クリップボードが変わるたびに集めます。取りこぼしはありませんが、"
+                        + "常駐している他のアプリが自動で書き込んだ内容も入ります。"),
+            ];
 
             _itemsView = CollectionViewSource.GetDefaultView(Items);
             _itemsView.Filter = o => o is ClipItem item && MatchesFilter(item);
@@ -281,6 +308,9 @@ namespace MyTaskTray.ViewModels
         /// <summary>コピーする形式として選べる一覧。</summary>
         public IReadOnlyList<ClipFormatOption> ClipFormatOptions { get; }
 
+        /// <summary>連続コピーの収集条件として選べる一覧。</summary>
+        public IReadOnlyList<SequentialCaptureOption> SequentialCaptureOptions { get; }
+
         /// <summary>選択項目の形式の説明。何が起きるかを短く出す。</summary>
         public string ClipFormatStatus
         {
@@ -336,6 +366,36 @@ namespace MyTaskTray.ViewModels
                 _showCopyNotification = value;
                 IsDirty = true;
                 OnPropertyChanged();
+            }
+        }
+
+        /// <summary>連続コピーが 1 件として集める範囲。</summary>
+        public SequentialCaptureTrigger SequentialCaptureTrigger
+        {
+            get => _sequentialCaptureTrigger;
+            set
+            {
+                if (_sequentialCaptureTrigger == value)
+                {
+                    return;
+                }
+
+                _sequentialCaptureTrigger = value;
+                IsDirty = true;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SequentialCaptureStatus));
+            }
+        }
+
+        /// <summary>選んでいる収集条件の説明。何が集まるかを短く出す。</summary>
+        public string SequentialCaptureStatus
+        {
+            get
+            {
+                SequentialCaptureOption? option = SequentialCaptureOptions.FirstOrDefault(
+                    o => o.Trigger == SequentialCaptureTrigger);
+
+                return option?.Description ?? string.Empty;
             }
         }
 
@@ -1504,10 +1564,9 @@ namespace MyTaskTray.ViewModels
                 movingItem.CategoryId = destinationCategoryId;
                 movingItem.Category = destinationCategory;
 
-                List<ClipItem> ordered = BuildSectionUnits(moving.Section)
+                List<ClipItem> ordered = [.. BuildSectionUnits(moving.Section)
                     .SelectMany(unit => unit.Items)
-                    .Where(item => !ReferenceEquals(item, movingItem))
-                    .ToList();
+                    .Where(item => !ReferenceEquals(item, movingItem))];
 
                 int insertAt;
                 if (target.Item is { } targetItem)
@@ -1792,6 +1851,7 @@ namespace MyTaskTray.ViewModels
             {
                 Version = AppSettings.CurrentVersion,
                 ShowCopyNotification = ShowCopyNotification,
+                SequentialCaptureTrigger = SequentialCaptureTrigger,
                 MenuHotKey = normalizedMenuHotKey,
                 ActionStates = actionStates,
                 SprintAnchorDate = validatedSprint?.AnchorDate,

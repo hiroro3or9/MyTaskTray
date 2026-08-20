@@ -632,6 +632,9 @@
                         Style="{StaticResource SubtleButton}" Click="OnOpenActionSettings"
                         IsEnabled="{Binding HasActionSettings}"
                         ToolTip="組み込みアクションの表示と、表示されるメニューを確認します" />
+                <Button x:Name="SequentialCaptureButton" Content="連続コピーの設定" Margin="8,0,0,0"
+                        Style="{StaticResource SubtleButton}" Click="OnOpenSequentialCaptureSettings"
+                        ToolTip="連続コピーが 1 件として集める操作の範囲を決めます" />
                 <Button x:Name="SprintButton" Content="スプリントの設定" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenSprintSettings"
                         ToolTip="{}{date@sprint} などが参照する基準日と長さを決めます" />
@@ -704,6 +707,36 @@
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
+                </StackPanel>
+            </Border>
+        </Popup>
+
+        <!-- 連続コピーの収集条件 -->
+        <Popup x:Name="SequentialCapturePopup" StaysOpen="False" AllowsTransparency="True" Focusable="True"
+               Placement="Top" PlacementTarget="{Binding ElementName=SequentialCaptureButton}"
+               VerticalOffset="-4" HorizontalOffset="-10"
+               PreviewKeyDown="OnPopupPreviewKeyDown">
+            <Border Style="{StaticResource PopupCard}" Width="470" Margin="10">
+                <StackPanel Margin="14">
+                    <TextBlock Text="連続コピーで集める操作" FontWeight="SemiBold" />
+                    <!--
+                        Windows はクリップボードが変わったことしか伝えず、誰がコピーしたかは分からない。
+                        どこまでを利用者の意図と見なすかの線引きなので、選択肢の違いを必ず添える。
+                        判定の考え方は DESIGN_COPY_INTENT.md を参照。
+                    -->
+                    <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="Windows はクリップボードが変わったことしか伝えないため、どの操作の結果かはこのアプリが推測します。どこまでを 1 件として集めるかを選べます。" />
+
+                    <ComboBox x:Name="SequentialCaptureBox"
+                              ItemsSource="{Binding SequentialCaptureOptions}"
+                              DisplayMemberPath="Name" SelectedValuePath="Trigger"
+                              SelectedValue="{Binding SequentialCaptureTrigger, Mode=TwoWay}" />
+
+                    <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="{Binding SequentialCaptureStatus}" />
+
+                    <TextBlock Margin="0,10,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="パスワード管理ソフトなど、コピー元が他のアプリでの保存を断っている内容は、どの設定でも集めません。" />
                 </StackPanel>
             </Border>
         </Popup>
