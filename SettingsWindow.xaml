@@ -97,6 +97,11 @@
                             <TextBlock Text="スマート" Style="{StaticResource BadgeText}" />
                         </Border>
                         <Border Style="{StaticResource Badge}"
+                                ToolTip="クリップボードの各行に適用します"
+                                Visibility="{Binding UsesEachLine, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="複数行" Style="{StaticResource BadgeText}" />
+                        </Border>
+                        <Border Style="{StaticResource Badge}"
                                 ToolTip="前面のアプリによって表示が変わります"
                                 Visibility="{Binding HasAppCondition, Converter={StaticResource BoolToVis}}">
                             <TextBlock Text="アプリ" Style="{StaticResource BadgeText}" />
@@ -474,6 +479,12 @@
                                                      Text="{Binding SelectedItem.ClipboardPattern, UpdateSourceTrigger=PropertyChanged}"
                                                      ToolTip="名前付きキャプチャは {match:名前} でコピー文字列に差し込めます" />
                                         </StackPanel>
+
+                                        <CheckBox Margin="0,10,0,0"
+                                                  Content="複数行にも適用する（各行を 1 件として、行の数だけコピーする）"
+                                                  IsChecked="{Binding SelectedItem.ApplyToEachLine, Mode=TwoWay}"
+                                                  Visibility="{Binding SelectedItem.CanApplyToEachLine, Converter={StaticResource BoolToVis}}"
+                                                  ToolTip="20 行をコピーしてこの項目を選ぶと、20 行ぶんの結果が改行でつながってコピーされます。条件に合わない行（見出し行や空行）は飛ばします" />
 
                                         <TextBlock Margin="0,7,0,0" TextWrapping="Wrap" FontSize="11"
                                                    Foreground="{DynamicResource Brush.Text.Secondary}"

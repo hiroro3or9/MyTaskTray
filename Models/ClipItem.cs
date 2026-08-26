@@ -24,6 +24,7 @@ namespace MyTaskTray.Models
         private string _appProcess = string.Empty;
         private string _appTitlePattern = string.Empty;
         private ClipFormat _format;
+        private bool _applyToEachLine;
 
         /// <summary>
         /// 項目を識別する ID。連番カウンターの引き継ぎに使う。
@@ -98,7 +99,9 @@ namespace MyTaskTray.Models
                 value,
                 nameof(ClipboardCondition),
                 nameof(HasSmartCondition),
-                nameof(IsRegexCondition));
+                nameof(IsRegexCondition),
+                nameof(CanApplyToEachLine),
+                nameof(UsesEachLine));
         }
 
         /// <summary>
@@ -110,6 +113,46 @@ namespace MyTaskTray.Models
             get => _clipboardPattern;
             set => Set(ref _clipboardPattern, value ?? string.Empty, nameof(ClipboardPattern));
         }
+
+        /// <summary>
+        /// クリップボードの各行を 1 件として扱い、行の数だけコピー文字列を作るかどうか。
+        ///
+        /// <para>
+        /// 既定は false で、従来どおりクリップボード全体を 1 件として照合する。
+        /// 設定ファイルに書かれていなければこの値になるので、古い設定の挙動は変わらない。
+        /// </para>
+        /// <para>
+        /// <see cref="ClipboardMatchKind.Always"/>（常に表示）では意味を持たない。
+        /// 条件が無いので行に切る根拠が無く、そもそもメニューの組み立てで
+        /// クリップボードを読んでいないため、有効にすると 0 件になって黙って何も起きなくなる。
+        /// 判定には必ず <see cref="UsesEachLine"/> を使うこと。
+        /// 詳細は DESIGN_BULK_APPLY.md §2。
+        /// </para>
+        /// </summary>
+        public bool ApplyToEachLine
+        {
+            get => _applyToEachLine;
+            set => Set(ref _applyToEachLine, value, nameof(ApplyToEachLine), nameof(UsesEachLine));
+        }
+
+        /// <summary>
+        /// 「複数行にも適用する」を選べる項目かどうか（設定画面での表示の出し分けに使う）。
+        /// 区切り線と、表示条件を持たない項目では選べない。
+        /// </summary>
+        [JsonIgnore]
+        public bool CanApplyToEachLine => !IsSeparator && HasSmartCondition;
+
+        /// <summary>
+        /// 実際に複数行へ適用される項目かどうか。
+        ///
+        /// <para>
+        /// チェックを入れたあとで表示条件を「常に表示」へ戻すと、
+        /// 設定ファイルには <see cref="ApplyToEachLine"/> が true のまま残る。
+        /// その状態で行ごとに回すと 0 件になるため、条件のほうも必ず見る。
+        /// </para>
+        /// </summary>
+        [JsonIgnore]
+        public bool UsesEachLine => ApplyToEachLine && CanApplyToEachLine;
 
         /// <summary>
         /// この項目を表示する前面アプリの実行ファイル名。カンマ区切りで複数書ける。
@@ -172,7 +215,9 @@ namespace MyTaskTray.Models
                 value,
                 nameof(IsSeparator),
                 nameof(IsNotSeparator),
-                nameof(DisplayName));
+                nameof(DisplayName),
+                nameof(CanApplyToEachLine),
+                nameof(UsesEachLine));
         }
 
         /// <summary><c>{seq}</c> が次に出力する番号。コピーするたびに <see cref="SequenceStep"/> 分進む。</summary>
@@ -301,6 +346,7 @@ namespace MyTaskTray.Models
             SequenceStep = SequenceStep,
             ClipboardCondition = ClipboardCondition,
             ClipboardPattern = ClipboardPattern,
+            ApplyToEachLine = ApplyToEachLine,
             AppProcess = AppProcess,
             AppTitlePattern = AppTitlePattern,
         };

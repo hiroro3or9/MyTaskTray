@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Threading;
@@ -37,6 +38,13 @@ namespace MyTaskTray
         private static readonly IReadOnlyDictionary<string, string> EmptyCaptures
             = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// 表示条件を持たない項目（常に表示）に渡す「空の 1 件」。
+        /// 中身が空の辞書なので、<c>{match:…}</c> は書いたままの文字列として残る。
+        /// </summary>
+        private static readonly IReadOnlyList<IReadOnlyDictionary<string, string>> EmptyCaptureRows
+            = [EmptyCaptures];
+
         // 同じ ContextMenuStrip は開くたびに中身を作り直す。
         // KeyDown をそのたびに追加すると、1 回の押下で過去のハンドラーまで全部動くため、
         // ドロップダウンごとに 1 個だけ持ち、現在の番号一覧だけを更新する。
@@ -45,7 +53,7 @@ namespace MyTaskTray
 
         private sealed class NumberKeyBinding
         {
-            private IReadOnlyList<ToolStripMenuItem> _numbered = [];
+            private List<ToolStripMenuItem> _numbered = [];
             private readonly HashSet<Keys> _pressed = [];
 
             public NumberKeyBinding(ToolStripDropDown dropDown)
@@ -55,7 +63,7 @@ namespace MyTaskTray
                 dropDown.Closed += (_, _) => _pressed.Clear();
             }
 
-            public void Update(IReadOnlyList<ToolStripMenuItem> numbered)
+            public void Update(List<ToolStripMenuItem> numbered)
             {
                 _numbered = numbered;
                 _pressed.Clear();
@@ -82,10 +90,23 @@ namespace MyTaskTray
                 => _pressed.Remove(e.KeyCode);
         }
 
+        /// <summary>
+        /// メニューに並べる 1 項目と、その項目に差し込む <c>{match:…}</c> の値。
+        /// </summary>
+        /// <param name="Captures">
+        /// 差し込む値。通常は 1 件で、項目の「複数行にも適用する」が効いたときだけ
+        /// 行の数だけ並ぶ。件の数だけコピー文字列を展開して改行でつなぐ。
+        /// </param>
+        /// <param name="BulkHint">
+        /// 複数行に適用したときにツールチップへ添える説明（件数・1 かたまりの行数・
+        /// 打ち切りや端数で対象外になった行）。従来どおりの 1 件なら空文字。
+        /// メニューを組み立てる場所にしか材料が揃わないため、ここで作って持ち回る。
+        /// </param>
         private readonly record struct MenuEntry(
             ClipItem Item,
-            IReadOnlyDictionary<string, string> Captures,
-            ForegroundApp AppContext);
+            IReadOnlyList<IReadOnlyDictionary<string, string>> Captures,
+            ForegroundApp AppContext,
+            string BulkHint);
 
         // NotifyIcon が右クリック時に使っている内部処理。左クリックでも同じ見せ方をするために借りる。
         // 非公開メンバーなので将来の .NET で無くなる可能性があるが、
@@ -783,14 +804,18 @@ namespace MyTaskTray
 
                 if (item.IsSeparator || item.ClipboardCondition == ClipboardMatchKind.Always)
                 {
-                    regular.Add(new MenuEntry(item, EmptyCaptures, _menuContext));
+                    regular.Add(new MenuEntry(item, EmptyCaptureRows, _menuContext, string.Empty));
                     continue;
                 }
 
-                ClipboardMatchResult result = ClipboardMatcher.Match(item, clipboard());
-                if (result.IsMatch)
+                ClipboardMatchRows rows = ClipboardMatcher.MatchEach(item, clipboard());
+                if (rows.IsMatch)
                 {
-                    smart.Add(new MenuEntry(item, result.Captures, _menuContext));
+                    smart.Add(new MenuEntry(
+                        item,
+                        [.. rows.Rows.Select(static row => row.Captures)],
+                        _menuContext,
+                        DescribeBulk(item, rows)));
                 }
             }
 
@@ -1439,6 +1464,7 @@ namespace MyTaskTray
                         clipboard,
                         menuEntry.Captures,
                         menuEntry.AppContext,
+                        menuEntry.BulkHint,
                         enabled);
 
                 string categoryId = item.CategoryId.Trim();
@@ -1595,7 +1621,7 @@ namespace MyTaskTray
         /// 選択メニューは中身だけを差し替えるため、呼び出すたびに現在の一覧を渡せる形にしている。
         /// </summary>
         private static void ActivateNumberedItem(
-            IReadOnlyList<ToolStripMenuItem> numbered,
+            List<ToolStripMenuItem> numbered,
             KeyEventArgs e)
         {
             int index = NumberKeyToIndex(e.KeyCode);
@@ -1713,11 +1739,43 @@ namespace MyTaskTray
                 AppTitle = app.IsKnown && app.Title.Length > 0 ? app.Title : null,
             };
 
+        /// <summary>
+        /// ツールチップや選択肢のプレビューで、代表として見せる 1 件。
+        /// 複数行に適用する項目でも、見せるのは先頭の件だけにする。
+        /// </summary>
+        private static IReadOnlyDictionary<string, string> Representative(
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures)
+            => captures.Count > 0 ? captures[0] : EmptyCaptures;
+
+        /// <summary>
+        /// 複数行に適用したときに、ツールチップへ添える説明。
+        /// 従来どおり 1 行を 1 件として 1 件だけ作る場合は空文字を返す。
+        /// </summary>
+        private static string DescribeBulk(ClipItem item, ClipboardMatchRows rows)
+        {
+            if (!item.UsesEachLine || rows.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            if (rows.Count <= 1 && !rows.Truncated)
+            {
+                // 結果として 1 件を作っただけ。従来と同じなので何も言わない
+                return string.Empty;
+            }
+
+            return $"\n{rows.Count} 件をまとめてコピーします"
+                + (rows.Truncated
+                    ? $"\n上限 {ClipboardMatcher.MaxBulkRows} 件のため、以降は対象外です"
+                    : string.Empty);
+        }
+
         private ToolStripMenuItem CreateClipMenuItem(
             ClipItem item,
             Func<string> clipboard,
-            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures,
             ForegroundApp appContext,
+            string bulkHint,
             bool enabled)
         {
             string label = string.IsNullOrWhiteSpace(item.Name) ? item.Text : item.Name;
@@ -1732,7 +1790,7 @@ namespace MyTaskTray
             {
                 Enabled = enabled,
                 ToolTipText = enabled
-                    ? BuildToolTip(item, clipboard, _settings.Sprint, captures, appContext)
+                    ? BuildToolTip(item, clipboard, _settings.Sprint, captures, appContext, bulkHint)
                     : BuildActiveSessionBlockedReason(),
                 Tag = item,
             };
@@ -1745,8 +1803,9 @@ namespace MyTaskTray
             ClipItem item,
             Func<string> clipboard,
             SprintSchedule? sprint,
-            IReadOnlyDictionary<string, string> captures,
-            ForegroundApp appContext)
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures,
+            ForegroundApp appContext,
+            string bulkHint)
         {
             string raw = Truncate(item.Text, 200);
             DateTime now = DateTime.Now;
@@ -1755,7 +1814,7 @@ namespace MyTaskTray
             {
                 Clipboard = clipboard,
                 Sprint = sprint,
-                Matches = captures,
+                Matches = Representative(captures),
             }, appContext);
 
             // 選択肢は、設定画面のプレビューと同じ規則で先頭のものを代表として出す
@@ -1780,7 +1839,10 @@ namespace MyTaskTray
                 : "\n選択: " + string.Join(" → ", choices.Select(c => c.Name))
                     + "（下は先頭の選択肢）";
 
-            string hints = choiceHint + inputHint;
+            // 複数行に適用する項目では、全件を並べても Truncate() が 200 文字で切ってしまい読めない。
+            // 件数は言葉で伝え（bulkHint）、展開結果は先頭 1 件を代表として見せる
+            // （DESIGN_BULK_APPLY.md §6）
+            string hints = bulkHint + choiceHint + inputHint;
 
             if (string.Equals(raw, Truncate(expanded, 200), StringComparison.Ordinal))
             {
@@ -1798,7 +1860,7 @@ namespace MyTaskTray
         private void ActivateClipItem(
             ClipItem item,
             Func<string> clipboard,
-            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures,
             ForegroundApp appContext)
         {
             // メニューを開いたあとに別経路でセッションが始まった場合も、
@@ -1828,7 +1890,7 @@ namespace MyTaskTray
                 item,
                 choices,
                 clipboard,
-                captures,
+                Representative(captures),
                 appContext,
                 selected => ContinueActivateClipItem(item, clipboard, captures, appContext, selected));
         }
@@ -1837,7 +1899,7 @@ namespace MyTaskTray
         private void ContinueActivateClipItem(
             ClipItem item,
             Func<string> clipboard,
-            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures,
             ForegroundApp appContext,
             IReadOnlyDictionary<string, string>? choices)
         {
@@ -1864,7 +1926,7 @@ namespace MyTaskTray
             ClipItem item,
             IReadOnlyList<InputCaptureDefinition> inputs,
             string sourceClipboard,
-            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures,
             ForegroundApp appContext,
             IReadOnlyDictionary<string, string>? choices)
         {
@@ -2624,7 +2686,7 @@ namespace MyTaskTray
             ClipItem item,
             Func<string> clipboardReader,
             IReadOnlyDictionary<string, string>? inputs,
-            IReadOnlyDictionary<string, string> captures,
+            IReadOnlyList<IReadOnlyDictionary<string, string>> captures,
             ForegroundApp appContext,
             IReadOnlyDictionary<string, string>? choices)
         {
@@ -2657,23 +2719,41 @@ namespace MyTaskTray
                 return;
             }
 
-            string value = TemplateEngine.Expand(
-                item.Text,
-                DateTime.Now,
-                item.SequenceValue,
-                AddAppContext(new ExpandValues
-                {
-                    Clipboard = () => clipboard,
-                    Sprint = _settings.Sprint,
-                    Inputs = inputs,
-                    Matches = captures,
-                    Choices = choices,
+            // 時刻は全部の件で同じ値を使う。件ごとに DateTime.Now を読むと、
+            // {time:HH:mm:ss} を並べたときに行どうしで秒がずれる（ResolveChoiceOptions と同じ理由）。
+            // 連番も 1 回のコピーにつき 1 つの値として扱うため、ここでは進めない
+            DateTime now = DateTime.Now;
+            ExpandValues values = AddAppContext(new ExpandValues
+            {
+                Clipboard = () => clipboard,
+                Sprint = _settings.Sprint,
+                Inputs = inputs,
+                Choices = choices,
 
-                    // HTML の項目では、差し込まれた値だけをエスケープする。
-                    // 利用者が書いたタグは生かしたまま、{input:…} や {choice:…} に入った
-                    // & や < が壊れた HTML にならないようにするため
-                    ValueTransform = ClipboardService.GetValueTransform(item.Format),
-                }, appContext));
+                // HTML の項目では、差し込まれた値だけをエスケープする。
+                // 利用者が書いたタグは生かしたまま、{input:…} や {choice:…} に入った
+                // & や < が壊れた HTML にならないようにするため
+                ValueTransform = ClipboardService.GetValueTransform(item.Format),
+            }, appContext);
+
+            // 件の数だけ展開して改行でつなぐ。
+            // 通常は 1 件なので、結果も進む連番も従来とまったく同じになる
+            IReadOnlyList<IReadOnlyDictionary<string, string>> rows =
+                captures.Count > 0 ? captures : EmptyCaptureRows;
+
+            StringBuilder builder = new();
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append('\n');
+                }
+
+                builder.Append(TemplateEngine.Expand(
+                    item.Text, now, item.SequenceValue, values with { Matches = rows[i] }));
+            }
+
+            string value = builder.ToString();
 
             if (!ClipboardService.TryCopy(value, item.Format))
             {
@@ -2701,6 +2781,13 @@ namespace MyTaskTray
                     if (item.HasFormat)
                     {
                         label += $" ({item.FormatLabel})";
+                    }
+
+                    // 条件に合わない行は飛ばすため、行数と件数は一致しない。
+                    // 何件ぶんが入ったのかを言わないと、取りこぼしに気付けない
+                    if (rows.Count > 1)
+                    {
+                        label += $"（{rows.Count} 件）";
                     }
 
                     ToastWindow.ShowToast(label, TemplateEngine.ToSingleLine(value, 120));

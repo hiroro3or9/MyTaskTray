@@ -238,7 +238,7 @@ namespace MyTaskTray.Services
 
         private static bool RemapLayoutCategories(
             IEnumerable<MenuLayoutNode> layout,
-            IReadOnlyDictionary<string, string> remappedIds)
+            Dictionary<string, string> remappedIds)
         {
             bool changed = false;
             foreach (MenuLayoutNode node in layout.Where(node => node is not null))
@@ -366,8 +366,8 @@ namespace MyTaskTray.Services
         }
 
         private static bool CategoriesEqual(
-            IReadOnlyList<ClipCategory> left,
-            IReadOnlyList<ClipCategory> right)
+            List<ClipCategory> left,
+            List<ClipCategory> right)
             => left.Count == right.Count
                 && left.Zip(right).All(pair => pair.First is not null
                     && string.Equals(pair.First.Id, pair.Second.Id, StringComparison.Ordinal)
@@ -376,8 +376,8 @@ namespace MyTaskTray.Services
                     && string.Equals(pair.First.Icon, pair.Second.Icon, StringComparison.Ordinal));
 
         private static bool LayoutEquals(
-            IReadOnlyList<MenuLayoutNode> left,
-            IReadOnlyList<MenuLayoutNode> right)
+            List<MenuLayoutNode> left,
+            List<MenuLayoutNode> right)
             => left.Count == right.Count
                 && left.Zip(right).All(pair => pair.First is not null
                     && pair.First.Kind == pair.Second.Kind

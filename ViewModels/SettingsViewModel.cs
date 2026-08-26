@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Windows.Data;
 using MyTaskTray.Models;
 using MyTaskTray.Services;
@@ -923,10 +924,32 @@ namespace MyTaskTray.ViewModels
                     return error;
                 }
 
-                bool matched = ClipboardMatcher.Match(SelectedItem, _clipboard).IsMatch;
-                return option.Description + (matched
-                    ? " 現在のクリップボードには一致しています。"
-                    : " 現在のクリップボードには一致していません。");
+                ClipboardMatchRows rows = ClipboardMatcher.MatchEach(SelectedItem, _clipboard);
+
+                if (!SelectedItem.UsesEachLine)
+                {
+                    return option.Description + (rows.IsMatch
+                        ? " 現在のクリップボードには一致しています。"
+                        : " 現在のクリップボードには一致していません。");
+                }
+
+                string unit = SelectedItem.IsRegexCondition
+                    ? "クリップボード全体に繰り返し当て、一致した箇所ごとに 1 件を作ります"
+                        + "（^ と $ は各行の先頭・末尾になります）。"
+                    : "各行を 1 件として照合します。";
+
+                if (!rows.IsMatch)
+                {
+                    return option.Description + " " + unit
+                        + "現在のクリップボードには一致がありません。";
+                }
+
+                return option.Description + " " + unit
+                    + $"現在のクリップボードでは {rows.Count} 件になります"
+                    + (rows.Truncated
+                        ? $"（上限 {ClipboardMatcher.MaxBulkRows} 件で打ち切りました）"
+                        : string.Empty)
+                    + "。";
             }
         }
 
@@ -1011,9 +1034,9 @@ namespace MyTaskTray.ViewModels
                     return string.Empty;
                 }
 
-                ClipboardMatchResult match = SelectedItem.HasSmartCondition
-                    ? ClipboardMatcher.Match(SelectedItem, _clipboard)
-                    : ClipboardMatchResult.NoMatch;
+                ClipboardMatchRows rows = SelectedItem.HasSmartCondition
+                    ? ClipboardMatcher.MatchEach(SelectedItem, _clipboard)
+                    : ClipboardMatchRows.None;
 
                 DateTime now = DateTime.Now;
                 int sequence = SelectedItem.SequenceValue;
@@ -1022,7 +1045,9 @@ namespace MyTaskTray.ViewModels
                 {
                     Clipboard = () => _clipboard,
                     Sprint = Sprint,
-                    Matches = match.IsMatch ? match.Captures : null,
+
+                    // 代表として先頭の件を使う。複数件あるときは下で件ごとに差し替える
+                    Matches = rows.IsMatch ? rows.Rows[0].Captures : null,
                     AppName = _appContext.IsKnown && _appContext.Name.Length > 0
                         ? _appContext.Name
                         : null,
@@ -1031,22 +1056,48 @@ namespace MyTaskTray.ViewModels
                         : null,
                 };
 
-                return TemplateEngine.Expand(
-                    SelectedItem.Text,
-                    now,
-                    sequence,
-                    values with
-                    {
-                        // 選ぶのはコピーのときなので、ここでは先頭の選択肢を代表として使う。
-                        // 代表値であることは ChoiceStatus で伝える
-                        Choices = TemplateEngine.GetDefaultChoices(
-                            SelectedItem.Text, now, sequence, values),
+                ExpandValues resolved = values with
+                {
+                    // 選ぶのはコピーのときなので、ここでは先頭の選択肢を代表として使う。
+                    // 代表値であることは ChoiceStatus で伝える
+                    Choices = TemplateEngine.GetDefaultChoices(
+                        SelectedItem.Text, now, sequence, values),
 
-                        // 実際にコピーされる文字列を出すのが目的なので、
-                        // 形式ごとの後処理もここで通しておく。通さないと、
-                        // HTML の項目でプレビューと実際のコピー内容が食い違う
-                        ValueTransform = ClipboardService.GetValueTransform(SelectedItem.Format),
-                    });
+                    // 実際にコピーされる文字列を出すのが目的なので、
+                    // 形式ごとの後処理もここで通しておく。通さないと、
+                    // HTML の項目でプレビューと実際のコピー内容が食い違う
+                    ValueTransform = ClipboardService.GetValueTransform(SelectedItem.Format),
+                };
+
+                // 差し込む値の並び。条件に合わなければ 1 件だけ null を置く
+                // （{match:…} は書いたままの文字列として残る）。
+                // トレイでのコピー（CopyToClipboard）と同じく、件の数だけ展開して改行でつなぐ
+                List<IReadOnlyDictionary<string, string>?> matches = [];
+                if (rows.IsMatch)
+                {
+                    foreach (ClipboardMatchResult row in rows.Rows)
+                    {
+                        matches.Add(row.Captures);
+                    }
+                }
+                else
+                {
+                    matches.Add(null);
+                }
+
+                StringBuilder builder = new();
+                for (int i = 0; i < matches.Count; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append('\n');
+                    }
+
+                    builder.Append(TemplateEngine.Expand(
+                        SelectedItem.Text, now, sequence, resolved with { Matches = matches[i] }));
+                }
+
+                return builder.ToString();
             }
         }
 
@@ -1795,7 +1846,7 @@ namespace MyTaskTray.ViewModels
             RebuildMenuOutline();
         }
 
-        private void ApplySectionOrderCore(MenuOutlineSection section, IReadOnlyList<ClipItem> ordered)
+        private void ApplySectionOrderCore(MenuOutlineSection section, List<ClipItem> ordered)
         {
             List<ClipItem> final = [.. Items];
             List<int> positions = [.. final
@@ -2060,6 +2111,7 @@ namespace MyTaskTray.ViewModels
 
                 case nameof(ClipItem.ClipboardCondition):
                 case nameof(ClipItem.ClipboardPattern):
+                case nameof(ClipItem.ApplyToEachLine):
                     OnPropertyChanged(nameof(Preview));
                     OnPropertyChanged(nameof(ClipboardConditionStatus));
                     break;
