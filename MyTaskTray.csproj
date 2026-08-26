@@ -45,6 +45,16 @@
 
   <ItemGroup>
     <!--
+      tests\ 配下はテストプロジェクトだけでコンパイルする。
+      本体がリポジトリのルートにあるため、除外しないとテストコードも既定の **\*.cs に含まれる。
+    -->
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <Page Remove="tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
       このプロジェクト唯一の外部依存。Markdown を HTML へ変換するために入れている。
       CommonMark の仕様に忠実であることに手を掛ける価値は薄いと判断した（DESIGN_RICH_COPY.md §5-1）。
 
