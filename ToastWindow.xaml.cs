@@ -13,6 +13,18 @@ namespace MyTaskTray
     public partial class ToastWindow : Window
     {
         private static ToastWindow? _current;
+        private static System.Drawing.Rectangle? _progressPanelBounds;
+
+        /// <summary>進捗パネルと同じ画面の通知は、その上へ避ける（実ピクセル座標）。</summary>
+        internal static System.Drawing.Rectangle? ProgressPanelBounds
+        {
+            get => _progressPanelBounds;
+            set
+            {
+                _progressPanelBounds = value;
+                _current?.Reposition();
+            }
+        }
 
         private readonly DispatcherTimer _timer;
         private bool _closing;
@@ -54,6 +66,18 @@ namespace MyTaskTray
             Rect area = GetWorkArea();
             Left = area.Right - ActualWidth;
             Top = area.Bottom - ActualHeight;
+            if (_progressPanelBounds is { } bounds)
+            {
+                Matrix fromDevice = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice
+                    ?? Matrix.Identity;
+                Rect panel = new(
+                    fromDevice.Transform(new Point(bounds.Left, bounds.Top)),
+                    fromDevice.Transform(new Point(bounds.Right, bounds.Bottom)));
+                if (new Rect(Left, Top, ActualWidth, ActualHeight).IntersectsWith(panel))
+                {
+                    Top = Math.Max(area.Top, panel.Top - ActualHeight);
+                }
+            }
         }
 
         /// <summary>

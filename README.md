@@ -40,6 +40,16 @@ A と B のあいだを 1 件ごとに往復する必要はありません。
 「収集を終えて貼り付けへ」で最初の `Ctrl+V` より前に収集を締め切ったりできます。
 途中でやめる場合は「連続コピー＆ペーストをキャンセル」を選びます。
 
+作業中は、開始した画面の右下に**進捗パネル**が表示されます。
+表示やボタン操作で入力先のフォーカスを奪わないため、元のアプリでそのまま作業を続けられます。
+
+- 収集中は、件数と最後にコピーした内容を表示します。「最後のコピーを取り消す」「貼り付けへ」をパネルから操作できます
+- 「収集した内容を確認」を開くと一覧が表示され、貼り付け開始前に ↑ / ↓ で並べ替えたり、× で不要なコピーを削除したりできます。同じ文字列も別々のコピーとして扱います
+- 並べ替えた後も「最後のコピーを取り消す」は、最後に収集したコピーを取り除きます
+- 貼り付け中は、次に貼り付ける内容・何件目か・残り件数・進捗バーを表示します。一覧では送信済みの項目にチェックが付き、次の項目が強調されます
+- 貼り付け開始後は順番の変更・削除はできません。完了・キャンセル・10 分間操作がない場合は、パネルも自動で閉じます
+- コピー通知をオフにしていても、作業中の進捗パネルは表示されます
+
 - 対象は**文字列としてコピーできるデータ**です。画像やファイルだけのコピーは追加しません
 - 収集するのは、**キーやマウスを操作した直後に発生したクリップボード更新**だけです。ウィンドウの終了など、操作を伴わない更新通知は無視します
 - どこまでを 1 件として集めるかは、設定画面の「連続コピーの設定」で選べます（→ [連続コピーで集める操作](#連続コピーで集める操作)）
@@ -1097,12 +1107,28 @@ Version 1 のように `Category` だけを持つ旧設定や、装飾を持た�
   メニューを組み立てる時点では、前面はこのアプリ自身に変わっているためです。
   調べた内容はメニューを閉じると破棄し、次に開くときへ持ち越しません。
 
+## 開発資料
+
+利用者向けの現行仕様はこの `README.md`、横断の現在地と次の作業順は [`ROADMAP.md`](ROADMAP.md) を正とする。
+設計メモは、現在も有効な判断や未完了項目があるものだけを残している。
+
+| 区分 | 文書 |
+| --- | --- |
+| 現行アーキテクチャ | [`DESIGN_ACTION_MENU.md`](DESIGN_ACTION_MENU.md) |
+| 実装済み・実機確認待ち | [`DESIGN_APP_CONTEXT.md`](DESIGN_APP_CONTEXT.md)、[`DESIGN_CHOICE.md`](DESIGN_CHOICE.md)、[`DESIGN_COPY_INTENT.md`](DESIGN_COPY_INTENT.md)、[`DESIGN_HOTKEY.md`](DESIGN_HOTKEY.md)、[`DESIGN_QUICK_ADD.md`](DESIGN_QUICK_ADD.md) |
+| 一部実装・残作業あり | [`DESIGN_BASE_SYNTAX.md`](DESIGN_BASE_SYNTAX.md)、[`DESIGN_BULK_APPLY.md`](DESIGN_BULK_APPLY.md)、[`DESIGN_RICH_COPY.md`](DESIGN_RICH_COPY.md) |
+| 実装保留 | [`DESIGN_IF.md`](DESIGN_IF.md) |
+| 実機確認ツール | [`tools/ClipboardProbe/README.md`](tools/ClipboardProbe/README.md) |
+
+解決済みのバグ調査書は現行ツリーから外し、履歴は Git に保持する。
+未解決の確認事項だけを `ROADMAP.md` に移している。
+
 ## 構成
 
 ```
 App.xaml(.cs)               起動処理（ウィンドウなし常駐）
-TrayIconManager.cs          トレイアイコンとメニューの生成
-SettingsWindow.xaml(.cs)    設定画面
+TrayIconManager*.cs         トレイアイコン、メニュー、コピー、作業セッション（責務別 partial class）
+SettingsWindow.xaml / SettingsWindow*.cs 設定画面（責務別 partial class）
 QuickAddWindow.xaml(.cs)    クリップボードを項目にするとき名前を尋ねる小窓
 ToastWindow.xaml(.cs)       コピー完了の通知
 DropIndicator.cs            並べ替え時の挿入位置を示す添付プロパティ
@@ -1125,10 +1151,10 @@ Services/ActionSessionManager.cs 実行中の作業モードを 1 つだけ管�
 Services/ClipboardCaptureSession.cs 複数入力中だけクリップボード変更を監視
 Services/SequentialCopyPasteSession.cs 連続コピーの収集と Ctrl+V ごとの順次貼り付け（収集条件の判定を含む）
 Services/ExpressionEvaluator.cs  {calc:…} の数式エンジン
-Services/TemplateEngine.cs  差し込み（{date} など）の展開
+Services/TemplateEngine*.cs 差し込み（{date} など）の展開（入力・選択肢を分離）
 Services/ThemeManager.cs    Windows の外観設定への追従
 Services/TrayMenuTheme.cs   トレイメニューのダークテーマ描画
-ViewModels/SettingsViewModel.cs 設定画面のビューモデル
+ViewModels/SettingsViewModel*.cs 設定画面のビューモデル（状態・プレビュー・配置を分離）
 ViewModels/PlaceholderRow.cs    差し込み一覧の 1 行
 Resources/app-icon.svg      アイコンのマスター（256px 用）
 Resources/app.ico           アプリ / トレイアイコン（16〜256px の 8 サイズ）

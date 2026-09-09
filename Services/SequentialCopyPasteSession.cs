@@ -94,11 +94,10 @@ namespace MyTaskTray.Services
         private readonly DispatcherTimer _timer;
         private readonly LowLevelKeyboardProc _keyboardProc;
         private readonly LowLevelMouseProc? _mouseProc;
-        private readonly List<string> _items = [];
+        internal SequentialCopyPasteQueue Queue { get; } = new();
 
         private IntPtr _keyboardHook;
         private IntPtr _mouseHook;
-        private int _pasteIndex;
         private bool _listening;
         private bool _handlingClipboard;
         private uint _copyKeyDownVirtualKey;
@@ -153,8 +152,7 @@ namespace MyTaskTray.Services
             _timer.Tick += OnTimeout;
         }
 
-        public SequentialCopyPastePhase Phase { get; private set; }
-            = SequentialCopyPastePhase.Capturing;
+        public SequentialCopyPastePhase Phase => Queue.Phase;
 
         /// <summary>
         /// このセッションが 1 件として集める範囲。開始時の設定で固定される。
@@ -162,11 +160,11 @@ namespace MyTaskTray.Services
         /// </summary>
         public SequentialCaptureTrigger Trigger => _trigger;
 
-        public int CapturedCount => _items.Count;
+        public int CapturedCount => Queue.Items.Count;
 
-        public int PastedCount => _pasteIndex;
+        public int PastedCount => Queue.PastedCount;
 
-        public int RemainingCount => _items.Count - _pasteIndex;
+        public int RemainingCount => CapturedCount - PastedCount;
 
         /// <summary>
         /// クリップボードと入力の監視を始める。どれかを登録できなければ false。
@@ -219,7 +217,7 @@ namespace MyTaskTray.Services
         /// <summary>収集を明示的に終え、次の Ctrl+V を 1 件目の貼り付けにする。</summary>
         public bool TryBeginPasting()
         {
-            if (_disposed || Phase == SequentialCopyPastePhase.Pasting || _items.Count == 0)
+            if (_disposed || Phase == SequentialCopyPastePhase.Pasting || CapturedCount == 0)
             {
                 return false;
             }
@@ -232,14 +230,33 @@ namespace MyTaskTray.Services
         public bool TryUndoLastCapture(out string removed)
         {
             removed = string.Empty;
-            if (_disposed || Phase != SequentialCopyPastePhase.Capturing || _items.Count == 0)
+            if (_disposed || !Queue.TryUndoLastCapture(out removed))
             {
                 return false;
             }
 
-            int index = _items.Count - 1;
-            removed = _items[index];
-            _items.RemoveAt(index);
+            RestartTimer();
+            return true;
+        }
+
+        public bool TryRemoveCapture(int id)
+        {
+            if (_disposed || !Queue.TryRemove(id))
+            {
+                return false;
+            }
+
+            RestartTimer();
+            return true;
+        }
+
+        public bool TryMoveCapture(int id, int offset)
+        {
+            if (_disposed || !Queue.TryMove(id, offset))
+            {
+                return false;
+            }
+
             RestartTimer();
             return true;
         }
@@ -288,10 +305,10 @@ namespace MyTaskTray.Services
                 }
 
                 // 同じ値が複数行に現れる業務データもあるため、重複は除外しない。
-                _items.Add(value);
+                Queue.Capture(value);
                 _lastCaptureAt = Environment.TickCount64;
                 RestartTimer();
-                _captured(value, _items.Count);
+                _captured(value, CapturedCount);
             }
             finally
             {
@@ -358,7 +375,7 @@ namespace MyTaskTray.Services
                 }
 
                 // まだ 1 件も集めていなければ通常の Ctrl+V は妨げない。
-                if (_items.Count == 0)
+                if (CapturedCount == 0)
                 {
                     PostIfActive(() => _captureRejected(SequentialCaptureRejection.NothingCaptured));
                     return CallNextHookEx(_keyboardHook, code, wParam, lParam);
@@ -370,7 +387,7 @@ namespace MyTaskTray.Services
                     BeginPasting();
                 }
 
-                string value = _items[_pasteIndex];
+                string value = Queue.Next!.Value;
                 if (!ClipboardService.TryCopy(value))
                 {
                     // 古いクリップボード内容が貼られるほうが危険なので、この Ctrl+V は止める。
@@ -378,11 +395,11 @@ namespace MyTaskTray.Services
                     return new IntPtr(1);
                 }
 
-                _pasteIndex++;
+                Queue.Advance();
                 RestartTimer();
 
-                SequentialPasteProgress progress = new(_pasteIndex, _items.Count, value);
-                bool isLast = _pasteIndex >= _items.Count;
+                SequentialPasteProgress progress = new(PastedCount, CapturedCount, value);
+                bool isLast = PastedCount >= CapturedCount;
                 _completionPending = isLast;
 
                 // フックから戻る前にメニュー再構築や通知表示をすると、貼り付け先への
@@ -515,7 +532,7 @@ namespace MyTaskTray.Services
 
         private void BeginPasting()
         {
-            Phase = SequentialCopyPastePhase.Pasting;
+            Queue.TryBeginPasting();
             ClearCopyIntent();
             StopListening();
 

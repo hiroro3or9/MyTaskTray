@@ -16,6 +16,57 @@ namespace MyTaskTray
     /// <summary>実行中の作業セッションと、連続コピー＆ペーストを管理する。</summary>
     public sealed partial class TrayIconManager
     {
+        private SequentialProgressWindow? _sequentialProgressWindow;
+
+        private void UpdateSequentialProgressPanel()
+        {
+            SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
+                TrayActionIds.SequentialCopyPaste);
+            if (_disposed || session is null)
+            {
+                CloseSequentialProgressPanel();
+                return;
+            }
+
+            if (_sequentialProgressWindow is null)
+            {
+                SequentialProgressWindow panel = new();
+                panel.UndoRequested += UndoSequentialCapture;
+                panel.BeginPastingRequested += BeginSequentialPasting;
+                panel.CancelRequested += () => CancelSequentialCopyPaste(showToast: true, rebuildMenu: true);
+                // 対象は行の位置ではなく ID。更新直前のクリックでも別のコピーを消さない。
+                panel.RemoveRequested += id =>
+                {
+                    if (_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session)
+                        && session.TryRemoveCapture(id))
+                    {
+                        RebuildMenu();
+                    }
+                };
+                panel.MoveRequested += (id, offset) =>
+                {
+                    if (_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session)
+                        && session.TryMoveCapture(id, offset))
+                    {
+                        RebuildMenu();
+                    }
+                };
+                _sequentialProgressWindow = panel;
+                panel.Update(session.Queue);
+                panel.Show();
+                return;
+            }
+
+            _sequentialProgressWindow.Update(session.Queue);
+        }
+
+        private void CloseSequentialProgressPanel()
+        {
+            SequentialProgressWindow? panel = _sequentialProgressWindow;
+            _sequentialProgressWindow = null;
+            panel?.Close();
+        }
+
         private string BuildActiveSessionBlockedReason()
             => string.IsNullOrWhiteSpace(_actionSessions.CurrentDisplayName)
                 ? "別の作業モードを実行中のため使用できません"
@@ -104,7 +155,7 @@ namespace MyTaskTray
             {
                 session = new SequentialCopyPasteSession(
                     trigger: _settings.SequentialCaptureTrigger,
-                    captured: (value, count) =>
+                    captured: (_, _) =>
                     {
                         if (!_actionSessions.IsCurrent(TrayActionIds.SequentialCopyPaste, session))
                         {
@@ -112,12 +163,6 @@ namespace MyTaskTray
                         }
 
                         RebuildMenu();
-                        if (_settings.ShowCopyNotification)
-                        {
-                            ToastWindow.ShowToast(
-                                $"連続コピー: {count} 件目を追加しました",
-                                TemplateEngine.ToSingleLine(value, 100));
-                        }
                     },
                     captureRejected: reason =>
                     {
@@ -153,9 +198,6 @@ namespace MyTaskTray
                         if (progress.RemainingCount > 0)
                         {
                             RebuildMenu();
-                            ToastWindow.ShowToast(
-                                $"連続貼り付け: {progress.PastedCount}/{progress.TotalCount}",
-                                $"残り {progress.RemainingCount} 件です");
                         }
                     },
                     pasteFailed: () =>
@@ -165,6 +207,8 @@ namespace MyTaskTray
                             return;
                         }
 
+                        // 最初の Ctrl+V で収集を終了した後に失敗した場合も、段階を同期する。
+                        RebuildMenu();
                         ToastWindow.ShowToast(
                             "今回の貼り付けを止めました",
                             "クリップボードを更新できませんでした。もう一度 Ctrl+V を押してください");
@@ -227,9 +271,6 @@ namespace MyTaskTray
             }
 
             RebuildMenu();
-            ToastWindow.ShowToast(
-                "連続コピーを開始しました",
-                $"{DescribeCaptureAction()}、B で Ctrl+V を繰り返してください");
         }
 
         /// <summary>
@@ -262,24 +303,18 @@ namespace MyTaskTray
             }
 
             RebuildMenu();
-            ToastWindow.ShowToast(
-                "連続貼り付けの準備ができました",
-                $"Ctrl+V を押すたびに、{session.CapturedCount} 件を順番に貼り付けます");
         }
 
         private void UndoSequentialCapture()
         {
             SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
                 TrayActionIds.SequentialCopyPaste);
-            if (session is null || !session.TryUndoLastCapture(out string removed))
+            if (session is null || !session.TryUndoLastCapture(out _))
             {
                 return;
             }
 
             RebuildMenu();
-            ToastWindow.ShowToast(
-                "最後のコピーを取り消しました",
-                TemplateEngine.ToSingleLine(removed, 100));
         }
 
         private void CancelSequentialCopyPaste(bool showToast, bool rebuildMenu)
@@ -287,6 +322,7 @@ namespace MyTaskTray
             SequentialCopyPasteSession? session = _actionSessions.Get<SequentialCopyPasteSession>(
                 TrayActionIds.SequentialCopyPaste);
             bool canceled = _actionSessions.Cancel(TrayActionIds.SequentialCopyPaste, session);
+            CloseSequentialProgressPanel();
 
             if (rebuildMenu && !_disposed)
             {

@@ -1,10 +1,11 @@
 # 複数行への一括適用 設計メモ
 
-対象: `Services/ClipboardMatcher.cs`・`TrayIconManager.cs`・`Models/ClipItem.cs`。
-問い: **「1 行コピー → 変換 → 貼り付け」の繰り返しを、1 回で終わらせられるようにすべきか。**
+> **状態: 4-a 実装済み・自動テスト済み、4-b 未実装。**
+> 複数件を改行でまとめてコピーする部分は実装済み。
+> 「1 件ずつ貼り付け」と複数件サブメニュー、Windows 実機確認は残っている。
 
-サンドボックスに .NET SDK が無いため、実装コストはコード読解による見積もり。
-提案が既存の構造に乗るかどうかだけは、実際のコードを読んで確認した（末尾の「コードで確認した点」）。
+対象: `Services/ClipboardMatcher.cs`・`TrayIconManager*.cs`・`Models/ClipItem.cs`。
+問い: **「1 行コピー → 変換 → 貼り付け」の繰り返しを、1 回で終わらせられるようにすべきか。**
 
 ---
 
@@ -437,7 +438,7 @@ README の約束が、この項目では成り立たない。
 ### 実装して分かった点
 
 - **`ContainsClipboard()` の穴は開かなかった。** `{match:…}` の値は
-  `RebuildMenu()` が `MenuEntry` に載せて運ぶので、コピー文字列に `{clip}` が無くても届く。
+  `PopulateMenu()` が `MenuEntry` に載せて運ぶので、コピー文字列に `{clip}` が無くても届く。
   `DESIGN_BASE_SYNTAX.md` §2 と同じ穴を警戒していたが、
   クリップボードを読む場所が差し込みの外側にあるおかげで再発しなかった
 - **`ValueTransform` にも手が要らなかった。** ループが差し込みの外側にあるため、
@@ -445,7 +446,7 @@ README の約束が、この項目では成り立たない。
   そもそも登場しない
 - **`{clip}` と組み合わせると壊れる。** `{clip}` はクリップボード全体を指すので、
   全行がそのまま毎行に入る。文法上は書けてしまうため、README に注意書きを入れた
-- 差し替え点は読みどおり `RebuildMenu()` の 1 か所で済んだが、
+- 差し替え点は読みどおり `PopulateMenu()` の 1 か所で済んだが、
   そこから `CopyToClipboard()` までの 5 つのメソッドで
   引数の型を `IReadOnlyDictionary<…>` から `IReadOnlyList<IReadOnlyDictionary<…>>` へ広げる必要があった。
   選択肢のプレビュー（`AskChoices` / `ChoicePrompt`）だけは代表 1 件で足りるので、
@@ -454,7 +455,7 @@ README の約束が、この項目では成り立たない。
 ### 実装して分かった点（#4-2）
 
 - **`MenuEntry.Truncated`（bool）ではなく、完成した説明文を持ち回る形**（`BulkHint`）にした。
-  件数・打ち切りといった材料が揃うのは `RebuildMenu()` だけなので、そこで作るのが素直だった
+  件数・打ち切りといった材料が揃うのは `PopulateMenu()` だけなので、そこで作るのが素直だった
 - **キャプチャの組み立てを `BuildRegexCaptures()` に切り出した。**
   1 件として照合する場合と全体へ繰り返し当てる場合で
   `{match:1}` の作り方がずれると、書き方が場所によって変わってしまう
@@ -472,11 +473,11 @@ README の約束が、この項目では成り立たない。
   実際に手を動かして確かめるまで気付かなかった穴で、
   **「^…$ の項目が黙って消える」を防ぐつもりが、別の理由で黙って消えるところだった**
 
-### 確認できていないこと
+### 現在の検証状況
 
-**サンドボックスに .NET SDK が無いため、ビルドしていない。**
-変更箇所は通しで読み直し、呼び出し側の引数・波括弧の対応・XAML の整形式は機械的に確認したが、
-コンパイルは Windows 実機で行う必要がある。§実機で確認したいこと に加えて、次を確認したい。
+`ClipboardMatcher` の複数件照合、改行正規化、`Multiline`、件数上限と、
+`ApplyToEachLine` の未保存状態は C# の自動テストで確認済み。ビルドも成立している。
+残るのは、トレイメニューと設定画面を通す次の実機確認である。
 
 - 20 行のクリップボードで、通知に「（20 件）」が出ること
 - チェックを入れた項目が、1 行だけコピーしているときに従来どおり即コピーすること
@@ -491,20 +492,20 @@ README の約束が、この項目では成り立たない。
 
 ---
 
-## コードで確認した点
+## 実装時にコードで確認した点
 
-.NET SDK が無いため動かしてはいない。既存コードを読んで確かめた点だけ挙げる。
+次は設計・実装時に確認した境界と、現在の実装結果。
 
 | 確認したこと | 結果 |
 | --- | --- |
 | `TemplateEngine` に手を入れずに済むか | **済む。** 展開は `CopyToClipboard()` が `Matches = captures` を渡して呼ぶだけ。件ごとに `captures` を差し替えて `Expand()` を回せばよい |
-| `{match:…}` の値はどこで作られるか | `ClipboardMatcher.Match()` が `ClipboardMatchResult.Captures` として返し、`RebuildMenu()` → `MenuEntry` → `ActivateClipItem()` → `CopyToClipboard()` と渡っている。**差し替え点は `RebuildMenu()` の 1 か所** |
-| 「常に表示」の項目でクリップボードは読まれるか | **読まれない。** `EmptyCaptures` が渡る（§2 の根拠） |
-| 表示判定はいつ走るか | **メニューを開くたび、項目ごとに。** `RebuildMenu()` が `ClipboardMatcher.Match(item, clipboard())` を呼んでいる（§5 の根拠） |
-| ツールチップはいつ組み立てられるか | **同じくメニューを開くたび。** `BuildMenuItem()` が `ToolTipText` に `BuildToolTip()` の結果を直接入れており、遅延評価していない |
+| `{match:…}` の値はどこで作られるか | `ClipboardMatcher.MatchEach()` が件ごとのキャプチャを返し、`PopulateMenu()` → `MenuEntry` → `ActivateClipItem()` → `CopyToClipboard()` と渡す |
+| 「常に表示」の項目でクリップボードは読まれるか | **読まれない。** `EmptyCaptureRows` が渡る（§2 の根拠） |
+| 表示判定はいつ走るか | **メニューを開くたび、項目ごとに。** `PopulateMenu()` が `ClipboardMatcher.MatchEach(item, clipboard())` を呼ぶ |
+| ツールチップはいつ組み立てられるか | **同じくメニューを開くたび。** `CreateClipMenuItem()` が `ToolTipText` に `BuildToolTip()` の結果を直接入れ、遅延評価しない |
 | ツールチップに 20 行が出るか | **出ない。** `Truncate(expanded, 200)` が改行を `⏎` にして 200 文字で切る（§6 の根拠） |
 | 貼り付けフェーズだけを使えるか | `SequentialCopyPasteSession` は `Start()`（収集）→ `TryBeginPasting()` の順で、収集を飛ばす入口が無い。`StartPasting(IReadOnlyList<string>)` の追加が要る |
-| 設定画面のプレビューはどうなるか | `SettingsViewModel` は `ClipboardMatcher.Match(SelectedItem, _clipboard)` を直接呼んでいる（926 行・1015 行）。**2 か所とも `MatchEach()` に合わせないと、プレビューだけ 1 件のまま**になる |
+| 設定画面のプレビューはどうなるか | **対応済み。** `SettingsViewModel.Preview.cs` のプレビューと「コピーして試す」はどちらも `MatchEach()` を使う |
 
 ### 実機で確認したいこと
 

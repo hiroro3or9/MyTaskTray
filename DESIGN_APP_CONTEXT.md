@@ -1,9 +1,9 @@
 # 前面アプリで項目を絞り込む 検討メモ
 
-> **実装済み。** 本メモの方針どおり `AppProcess` / `AppTitlePattern` として実装した。
-> `Services/ForegroundApp.cs`（取得）と `Services/AppContextMatcher.cs`（判定）が本体で、
-> §6 の差し込み（`{app:name}` / `{app:title}` と正規表現抽出）も実装済み。
-> §7 の実機確認、特に **7-1（右クリック経路で前面ウィンドウを捕まえられるか）は未確認**。
+> **状態: 実装済み・実機確認待ち。**
+> `AppProcess` / `AppTitlePattern` と、`{app:name}` / `{app:title}`・正規表現抽出を実装済み。
+> `Services/ForegroundApp.cs` が取得、`Services/AppContextMatcher.cs` が判定を担当する。
+> §7、特に **7-1（右クリック経路で前面ウィンドウを捕まえられるか）は未確認**。
 
 「ターミナルが前面ならコマンド、チケット画面なら報告テンプレート」のように、
 **そのとき前面にあるウィンドウ**に応じてメニューの中身を変える案の検討。

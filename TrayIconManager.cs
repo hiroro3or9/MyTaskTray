@@ -767,6 +767,7 @@ namespace MyTaskTray
             DisposeMenu(old);
 
             _notifyIcon.Text = BuildIconToolTip();
+            UpdateSequentialProgressPanel();
         }
 
         /// <summary>現在のクリップボードとキャプチャ状態からメニュー内容を作る。</summary>
@@ -938,10 +939,7 @@ namespace MyTaskTray
                 return;
             }
 
-            ToolStripMenuItem parent = new("作業ツール(&T)")
-            {
-                ToolTipText = "一時的な作業やクリップボード加工を開始します",
-            };
+            ToolStripMenuItem parent = new("作業ツール(&T)");
             if (parent.DropDown is ToolStripDropDownMenu dropDown)
             {
                 dropDown.ShowImageMargin = false;
@@ -984,7 +982,7 @@ namespace MyTaskTray
                 {
                     Enabled = availability.IsEnabled,
                     ToolTipText = availability.IsEnabled
-                        ? action.ToolTip
+                        ? (HidesMenuToolTip(action.Id) ? string.Empty : action.ToolTip)
                         : availability.DisabledReason,
                     Tag = action.Id,
                 };
@@ -993,6 +991,12 @@ namespace MyTaskTray
                 previousGroup = action.Group;
             }
         }
+
+        /// <summary>
+        /// ツールチップがクリックの邪魔になる項目は、メニューでの表示を省く。
+        /// </summary>
+        private static bool HidesMenuToolTip(string actionId)
+            => string.Equals(actionId, TrayActionIds.SequentialCopyPaste, StringComparison.Ordinal);
 
         private static void ExecuteTrayAction(TrayActionDefinition action, TrayActionContext context)
         {
@@ -1845,6 +1849,7 @@ namespace MyTaskTray
             _disposed = true;
             ThemeManager.ThemeChanged -= OnThemeChanged;
             _actionSessions.Dispose();
+            CloseSequentialProgressPanel();
             _menuHotKey?.Dispose();
             _menuHotKey = null;
             _notifyIcon.MouseUp -= OnIconMouseUp;
