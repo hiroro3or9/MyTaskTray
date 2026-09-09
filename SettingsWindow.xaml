@@ -638,7 +638,7 @@
                           IsChecked="{Binding ShowCopyNotification}" />
                 <Button x:Name="HotKeyButton" Content="ホットキーの設定" Margin="16,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenHotKeySettings"
-                        ToolTip="トレイメニューを表示するグローバルホットキーを設定します" />
+                        ToolTip="トレイメニューの表示と Swap コピーのグローバルホットキーを設定します" />
                 <Button x:Name="ActionSettingsButton" Content="アクションの表示" Margin="8,0,0,0"
                         Style="{StaticResource SubtleButton}" Click="OnOpenActionSettings"
                         IsEnabled="{Binding HasActionSettings}"
@@ -681,6 +681,20 @@
                              ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換 を指定できます" />
                     <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
                                Text="{Binding MenuHotKeyStatus}" />
+
+                    <Border Height="1" Margin="0,14,0,12"
+                            Background="{DynamicResource Brush.Separator}" />
+
+                    <TextBlock Text="Swap コピーのホットキー" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="選択している文字をコピーし、その場へ元のクリップボードの内容を貼り付けます。次に貼り付けられるのは、選択していた文字です。空欄なら無効です。書き方はメニュー用と同じで、メニュー用と同じキーは指定できません。" />
+                    <TextBox x:Name="SwapCopyHotKeyBox"
+                             InputMethod.IsInputMethodEnabled="False"
+                             PreviewKeyDown="OnSwapCopyHotKeyBoxPreviewKeyDown"
+                             Text="{Binding SwapCopyHotKey, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換 を指定できます" />
+                    <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                               Text="{Binding SwapCopyHotKeyStatus}" />
                 </StackPanel>
             </Border>
         </Popup>

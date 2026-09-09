@@ -172,23 +172,40 @@ namespace MyTaskTray.Services
     }
 
     /// <summary>
+    /// 登録するホットキーの識別子。<c>RegisterHotKey</c> はウィンドウごとに識別子を見るため、
+    /// 用途ごとに別の値を割り当てておくと、受け取り側の取り違えに気づける。
+    /// </summary>
+    internal static class GlobalHotKeyIds
+    {
+        /// <summary>トレイメニューをカーソル位置へ表示する。</summary>
+        public const int Menu = 0x4D54; // "MT"
+
+        /// <summary>選択中の文字列とクリップボードを入れ替える。</summary>
+        public const int SwapCopy = 0x4D55;
+    }
+
+    /// <summary>
     /// アプリがウィンドウを表示していない間も、設定されたグローバルホットキーを受け取る。
     /// </summary>
     internal sealed class GlobalHotKey : IDisposable
     {
-        private const int HotKeyId = 0x4D54; // "MT"
         private const int WmHotKey = 0x0312;
         private const uint ModNoRepeat = 0x4000;
         private static readonly IntPtr MessageOnlyWindow = new(-3);
 
         private readonly Action _pressed;
         private readonly HwndSource _source;
+        private readonly int _hotKeyId;
         private bool _registered;
         private bool _disposed;
 
-        public GlobalHotKey(HotKeyGesture gesture, Action pressed)
+        /// <param name="hotKeyId">
+        /// <see cref="GlobalHotKeyIds"/> のいずれか。用途ごとに別の値を渡す。
+        /// </param>
+        public GlobalHotKey(HotKeyGesture gesture, Action pressed, int hotKeyId)
         {
             _pressed = pressed;
+            _hotKeyId = hotKeyId;
             DisplayName = gesture.DisplayName;
 
             HwndSourceParameters parameters = new("MyTaskTray.GlobalHotKey")
@@ -201,7 +218,7 @@ namespace MyTaskTray.Services
             _source.AddHook(WndProc);
             _registered = RegisterHotKey(
                 _source.Handle,
-                HotKeyId,
+                _hotKeyId,
                 gesture.Modifiers | ModNoRepeat,
                 gesture.VirtualKey);
         }
@@ -215,7 +232,7 @@ namespace MyTaskTray.Services
         private IntPtr WndProc(
             IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (message == WmHotKey && wParam.ToInt32() == HotKeyId)
+            if (message == WmHotKey && wParam.ToInt32() == _hotKeyId)
             {
                 handled = true;
 
@@ -245,7 +262,7 @@ namespace MyTaskTray.Services
 
             if (_registered)
             {
-                _ = UnregisterHotKey(_source.Handle, HotKeyId);
+                _ = UnregisterHotKey(_source.Handle, _hotKeyId);
                 _registered = false;
             }
 

@@ -313,6 +313,7 @@ namespace MyTaskTray
             RebuildMenu();
             _notifyIcon.Visible = true;
             RegisterMenuHotKey();
+            RegisterSwapCopyHotKey();
         }
 
         /// <summary>
@@ -338,7 +339,7 @@ namespace MyTaskTray
 
             try
             {
-                _menuHotKey = new GlobalHotKey(gesture, ShowMenuFromHotKey);
+                _menuHotKey = new GlobalHotKey(gesture, ShowMenuFromHotKey, GlobalHotKeyIds.Menu);
                 if (_menuHotKey.IsRegistered)
                 {
                     return;
@@ -367,6 +368,7 @@ namespace MyTaskTray
             _settings = SettingsStore.Load();
             RebuildMenu();
             RegisterMenuHotKey();
+            RegisterSwapCopyHotKey();
         }
 
         private void OnIconMouseUp(object? sender, MouseEventArgs e)
@@ -1852,6 +1854,8 @@ namespace MyTaskTray
             CloseSequentialProgressPanel();
             _menuHotKey?.Dispose();
             _menuHotKey = null;
+            _swapCopyHotKey?.Dispose();
+            _swapCopyHotKey = null;
             _notifyIcon.MouseUp -= OnIconMouseUp;
             _notifyIcon.MouseDown -= OnIconMouseDown;
             _notifyIcon.Visible = false;

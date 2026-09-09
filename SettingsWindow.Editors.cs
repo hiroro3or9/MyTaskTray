@@ -243,6 +243,22 @@ namespace MyTaskTray
             HotKeyBox.CaretIndex = HotKeyBox.Text.Length;
         }
 
+        /// <summary>
+        /// Swap コピーのホットキー欄で無変換キーを押したら、その名前を入力する。
+        /// 事情はメニュー用の欄と同じ。
+        /// </summary>
+        private void OnSwapCopyHotKeyBoxPreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.ImeNonConvert)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            _vm.SwapCopyHotKey = "無変換";
+            SwapCopyHotKeyBox.CaretIndex = SwapCopyHotKeyBox.Text.Length;
+        }
+
         private void OnOpenAppPopup(object sender, RoutedEventArgs e)
         {
             if (!_vm.HasKnownApps)

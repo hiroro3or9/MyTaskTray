@@ -100,6 +100,7 @@ namespace MyTaskTray.ViewModels
         private bool _showCopyNotification;
         private SequentialCaptureTrigger _sequentialCaptureTrigger;
         private string _menuHotKey = string.Empty;
+        private string _swapCopyHotKey = string.Empty;
         private bool _isDirty;
 
         // トレイ側で進んだ連番を取り込んでいる最中かどうか。
@@ -157,6 +158,7 @@ namespace MyTaskTray.ViewModels
             _showCopyNotification = settings.ShowCopyNotification;
             _sequentialCaptureTrigger = settings.SequentialCaptureTrigger;
             _menuHotKey = settings.MenuHotKey ?? string.Empty;
+            _swapCopyHotKey = settings.SwapCopyHotKey ?? string.Empty;
             _actionStates = new(settings.ActionStates ?? [], StringComparer.Ordinal);
             _sprintAnchorText = settings.SprintAnchorDate?.ToString(SprintDateFormat, CultureInfo.InvariantCulture)
                 ?? string.Empty;
@@ -452,6 +454,68 @@ namespace MyTaskTray.ViewModels
             }
 
             if (!HotKeyGesture.TryParse(_menuHotKey, out HotKeyGesture gesture, out error))
+            {
+                normalized = string.Empty;
+                return false;
+            }
+
+            normalized = gesture.DisplayName;
+            return true;
+        }
+
+        /// <summary>
+        /// Swap コピーを実行するグローバルホットキー。空欄なら無効。
+        /// メニュー用と同じく、入力途中を許すため文字列で持ち、保存時に検証する。
+        /// </summary>
+        public string SwapCopyHotKey
+        {
+            get => _swapCopyHotKey;
+            set
+            {
+                string next = value ?? string.Empty;
+                if (string.Equals(_swapCopyHotKey, next, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _swapCopyHotKey = next;
+                IsDirty = true;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SwapCopyHotKeyStatus));
+            }
+        }
+
+        /// <summary>Swap コピーのホットキー入力欄の下に表示する説明。</summary>
+        public string SwapCopyHotKeyStatus
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_swapCopyHotKey))
+                {
+                    return "空欄のため、Swap コピーは無効です。";
+                }
+
+                return HotKeyGesture.TryParse(
+                    _swapCopyHotKey, out HotKeyGesture gesture, out string error)
+                    ? $"保存後に {gesture.DisplayName} で入れ替えます。"
+                    : error;
+            }
+        }
+
+        /// <summary>
+        /// 保存用に Swap コピーのホットキーを検証し、統一表記へ整える。
+        /// 空欄は有効な「無効」設定として受け付ける。
+        /// </summary>
+        public bool TryGetNormalizedSwapCopyHotKey(out string normalized, out string error)
+        {
+            if (string.IsNullOrWhiteSpace(_swapCopyHotKey))
+            {
+                normalized = string.Empty;
+                error = string.Empty;
+                return true;
+            }
+
+            if (!HotKeyGesture.TryParse(_swapCopyHotKey, out HotKeyGesture gesture, out error))
             {
                 normalized = string.Empty;
                 return false;

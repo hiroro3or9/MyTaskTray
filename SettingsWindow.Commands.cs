@@ -89,6 +89,19 @@ namespace MyTaskTray
             Close();
         }
 
+        /// <summary>Swap コピーのホットキー欄を開いて選択する。保存できなかったときに使う。</summary>
+        private void FocusSwapCopyHotKeyBox()
+        {
+            HotKeyPopup.IsOpen = true;
+            Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    SwapCopyHotKeyBox.Focus();
+                    SwapCopyHotKeyBox.SelectAll();
+                }),
+                DispatcherPriority.Input);
+        }
+
         private bool TrySave()
         {
             if (!_vm.TryGetNormalizedMenuHotKey(out string normalizedMenuHotKey, out string hotKeyError))
@@ -107,6 +120,38 @@ namespace MyTaskTray
                         HotKeyBox.SelectAll();
                     }),
                     DispatcherPriority.Input);
+                return false;
+            }
+
+            if (!_vm.TryGetNormalizedSwapCopyHotKey(
+                out string normalizedSwapCopyHotKey, out string swapHotKeyError))
+            {
+                MessageBox.Show(
+                    "Swap コピーのホットキーを保存できません。\n" + swapHotKeyError,
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                FocusSwapCopyHotKeyBox();
+                return false;
+            }
+
+            // 同じキーを 2 つの用途へ登録すると、後から登録するほうが必ず失敗する。
+            // どちらが効いているのか利用者には見えないので、保存の時点で断る
+            if (normalizedSwapCopyHotKey.Length > 0
+                && string.Equals(
+                    normalizedMenuHotKey,
+                    normalizedSwapCopyHotKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(
+                    "Swap コピーのホットキーを保存できません。\n"
+                        + "メニューを表示するホットキーと同じキーは指定できません。",
+                    "MyTaskTray",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                FocusSwapCopyHotKeyBox();
                 return false;
             }
 
@@ -167,7 +212,8 @@ namespace MyTaskTray
             // 写したあとで整えると、保存した内容と画面の表示が食い違ったままになる
             NormalizeItems();
 
-            AppSettings settings = _vm.ToSettings(normalizedMenuHotKey, validatedSprint);
+            AppSettings settings = _vm.ToSettings(
+                normalizedMenuHotKey, normalizedSwapCopyHotKey, validatedSprint);
 
             // 設定画面を開いている間にトレイからコピーされて進んだ連番を取り込む
             AdoptExternalSequenceValues(settings);

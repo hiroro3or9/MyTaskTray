@@ -223,6 +223,128 @@ namespace MyTaskTray.Services
         }
 
         /// <summary>
+        /// いまクリップボードに載っている内容を、形式ごと控える。
+        /// 空のクリップボードは <see cref="ClipboardSnapshot.Empty"/> として成功扱いにする。
+        /// </summary>
+        internal static bool TryCaptureSnapshot(out ClipboardSnapshot snapshot)
+        {
+            ClipboardSnapshot captured = ClipboardSnapshot.Empty;
+
+            bool read = TryRun(() =>
+            {
+                // 再試行に備えて毎回作り直す。前の回の途中結果を残さない
+                captured = ClipboardSnapshot.Empty;
+
+                System.Windows.IDataObject? data = System.Windows.Clipboard.GetDataObject();
+                if (data is null)
+                {
+                    return;
+                }
+
+                // 形式の一覧すら読めなければ何も控えられない。
+                // ここは例外を握りつぶさず、TryRun に再試行させる
+                string[] formats = data.GetFormats(autoConvert: false) ?? [];
+
+                List<ClipboardSnapshot.Entry> entries = new(formats.Length);
+                string text = string.Empty;
+
+                foreach (string format in formats)
+                {
+                    if (string.IsNullOrEmpty(format))
+                    {
+                        continue;
+                    }
+
+                    object? value = GetDataSafely(data, format, autoConvert: false);
+                    if (value is null)
+                    {
+                        // 値を読めなくても、保存を拒む印だけは落とさない。
+                        // これらは「載っていること」自体に意味がある形式で、
+                        // 落とすと、戻したクリップボードが履歴へ流れてしまう
+                        if (IsExclusionFormat(format) && IsDataPresentSafely(data, format))
+                        {
+                            entries.Add(new ClipboardSnapshot.Entry(format, new MemoryStream()));
+                        }
+
+                        continue;
+                    }
+
+                    entries.Add(new ClipboardSnapshot.Entry(format, value));
+
+                    if (text.Length == 0 && value is string candidate && IsTextFormat(format))
+                    {
+                        text = candidate;
+                    }
+                }
+
+                captured = new ClipboardSnapshot([.. entries], text);
+            });
+
+            snapshot = read ? captured : ClipboardSnapshot.Empty;
+            return read;
+        }
+
+        /// <summary>
+        /// 控えた内容をクリップボードへ戻す。
+        ///
+        /// <para>
+        /// すべての形式を載せられなかった場合は、文字列だけでも戻す。
+        /// 1 つの形式のせいで利用者の元の内容が丸ごと消えるほうが困る。
+        /// </para>
+        /// </summary>
+        internal static bool TryRestoreSnapshot(ClipboardSnapshot snapshot)
+        {
+            ArgumentNullException.ThrowIfNull(snapshot);
+
+            if (snapshot.IsEmpty)
+            {
+                return RecordSelfWrite(TryRun(System.Windows.Clipboard.Clear));
+            }
+
+            if (RecordSelfWrite(TryRun(() => SetSnapshot(snapshot))))
+            {
+                return true;
+            }
+
+            return snapshot.Text.Length > 0 && TryCopy(snapshot.Text);
+        }
+
+        /// <summary>クリップボードの更新回数。取得できないときは 0。</summary>
+        internal static uint GetSequenceNumber() => GetClipboardSequenceNumber();
+
+        private static void SetSnapshot(ClipboardSnapshot snapshot)
+        {
+            System.Windows.DataObject data = new();
+
+            foreach (ClipboardSnapshot.Entry entry in snapshot.Entries)
+            {
+                try
+                {
+                    data.SetData(entry.Format, entry.Data, autoConvert: false);
+                }
+                catch (Exception)
+                {
+                    // 載せられない形式は飛ばす。残りの形式で貼り付けは成り立つ
+                }
+            }
+
+            // copy: true を付けないと、このアプリを終了した時点で中身が消える
+            System.Windows.Clipboard.SetDataObject(data, copy: true);
+        }
+
+        /// <summary>控えの代表文字列として採ってよい形式かどうか。</summary>
+        private static bool IsTextFormat(string format)
+            => string.Equals(format, System.Windows.DataFormats.UnicodeText, StringComparison.Ordinal)
+                || string.Equals(format, System.Windows.DataFormats.Text, StringComparison.Ordinal)
+                || string.Equals(
+                    format, System.Windows.DataFormats.StringFormat, StringComparison.Ordinal);
+
+        /// <summary>保存の可否を表す形式かどうか。</summary>
+        private static bool IsExclusionFormat(string format)
+            => ExclusionMarkerFormats.Contains(format, StringComparer.Ordinal)
+                || ExclusionFlagFormats.Contains(format, StringComparer.Ordinal);
+
+        /// <summary>
         /// 直前のクリップボード更新が、このアプリ自身の書き込みかどうか。
         ///
         /// <para>

@@ -16,7 +16,10 @@ namespace MyTaskTray.ViewModels
         /// <summary>
         /// 保存用の設定オブジェクトを作る。ホットキーとスプリントは保存前に検証済みの値を受け取る。
         /// </summary>
-        public AppSettings ToSettings(string normalizedMenuHotKey, SprintSchedule? validatedSprint)
+        public AppSettings ToSettings(
+            string normalizedMenuHotKey,
+            string normalizedSwapCopyHotKey,
+            SprintSchedule? validatedSprint)
         {
             SynchronizeAllItemCategories();
 
@@ -32,6 +35,7 @@ namespace MyTaskTray.ViewModels
                 ShowCopyNotification = ShowCopyNotification,
                 SequentialCaptureTrigger = SequentialCaptureTrigger,
                 MenuHotKey = normalizedMenuHotKey,
+                SwapCopyHotKey = normalizedSwapCopyHotKey,
                 ActionStates = actionStates,
                 SprintAnchorDate = validatedSprint?.AnchorDate,
                 SprintLengthDays = validatedSprint?.LengthDays ?? 14,

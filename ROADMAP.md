@@ -70,6 +70,7 @@
 | `DESIGN_QUICK_ADD.md` | §6 | メニューを閉じた直後に出した WPF 窓が、確実に前面へ来てキー入力を受けるか |
 | `DESIGN_RICH_COPY.md` | §9 | Word へ実際に貼ったときの見た目と、TSV と HTML を同時に載せたとき Excel がどちらを選ぶか |
 | `DESIGN_BASE_SYNTAX.md` | 末尾 | `{date@clip:ddd}` の曜日が地域設定どおりに出るか |
+| `DESIGN_SWAP_COPY.md` | §9 | ブラウザの入力欄で貼り付け待ち 350ms が足りるか。足りないと入れ替えた後の内容が貼られる |
 
 > **RICH_COPY には確認用の道具がある。** `tools/ClipboardProbe/` を `dotnet run` して
 > メニューから選ぶだけで §9 の項目を試せる。

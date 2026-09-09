@@ -81,6 +81,51 @@ Windows は「クリップボードが変わった」ことしか教えてくれ
 - 余計なものが 1 件入ってしまったときは、「最後のコピーを取り消す」で外せます
 - 監視を行うのは連続コピーを実行しているあいだだけです。常駐中に入力を見張ることはありません
 
+## Swap コピー
+
+選択している文字と、いまクリップボードにある内容を **1 回のキー操作で入れ替えます。**
+
+```
+実行前： 選択箇所 = B          クリップボード = A
+実行後： 選択箇所 = A          クリップボード = B
+```
+
+置き換えたい文字列 A を先にコピーしておき、置き換えられる箇所 B を選んでホットキーを押すと、
+
+1. 選択していた B がコピーされ、
+2. その場へ元のクリップボードの A が貼り付けられ、
+3. クリップボードには B が残ります。
+
+次に `Ctrl+V` すると B が貼られるので、**2 か所の値を入れ替える**作業がそのまま続けられます。
+A を消したくないだけなら、貼り付けずにそのまま次の箇所を選んでもう一度押します。
+
+### 使い方
+
+1. 設定画面 →「ホットキーの設定」→「Swap コピーのホットキー」にキーを入れて保存します（例: `Ctrl+Alt+S`）
+2. 入れ替えたい文字を選び、そのホットキーを押します
+
+**トレイメニューからは実行できません。** メニューを開くと前面が移り、
+選択とカーソル位置が失われるためです。ホットキー専用の機能です。
+既定では空欄（無効）なので、使う場合はキーを決めてください。
+メニューを表示するホットキーと同じキーは指定できません。
+
+### 覚えておくこと
+
+- **書式は保たれます。** Excel の書式付きコピーやブラウザからの HTML コピーも、
+  入れ替えを通しただけで平文にはなりません
+- **クリップボードが空のときは何もしません。** 貼り付けるものがないためです
+- **文字を選んでいないときも何もしません。** `Ctrl+C` を送ってもクリップボードが変わらなければ、
+  選択がないと判断してその場で終わります。クリップボードの内容はそのままです
+- 入れ替えは 4 段階の操作なので、**途中で失敗した場合は通知でお知らせします。**
+  「コピーしたときに通知を表示する」をオフにしていても、失敗と中断は必ず表示します
+- 貼り付けた直後に別のアプリでコピーすると、そちらを優先します
+  （選択していた内容はクリップボードへ戻しません）
+- 元に戻すときは、貼り付け先の `Ctrl+Z` を使ってください。
+  クリップボードには入れ替え前の選択内容が残っています
+- 作業モード（連続コピー＆ペーストなど）の実行中は使えません。
+  収集した内容を壊さないためです
+- 控えた内容はメモリ上だけに置き、設定ファイルや履歴には保存しません
+
 ## クリップボードの内容を加工する
 
 空行除外はトレイメニューの「作業ツール」に常設されます。
@@ -987,6 +1032,7 @@ feature/AAA/ver1.0.0/{clip:/ID-\d+/}       → feature/AAA/ver1.0.0/ID-4329
   "ShowCopyNotification": true,
   "SequentialCaptureTrigger": "UserInput",
   "MenuHotKey": "Ctrl+Alt+V",
+  "SwapCopyHotKey": "Ctrl+Alt+S",
   "ActionStates": {
     "sequential-copy-paste": true,
     "remove-blank-lines": true,
@@ -1115,7 +1161,7 @@ Version 1 のように `Category` だけを持つ旧設定や、装飾を持た�
 | 区分 | 文書 |
 | --- | --- |
 | 現行アーキテクチャ | [`DESIGN_ACTION_MENU.md`](DESIGN_ACTION_MENU.md) |
-| 実装済み・実機確認待ち | [`DESIGN_APP_CONTEXT.md`](DESIGN_APP_CONTEXT.md)、[`DESIGN_CHOICE.md`](DESIGN_CHOICE.md)、[`DESIGN_COPY_INTENT.md`](DESIGN_COPY_INTENT.md)、[`DESIGN_HOTKEY.md`](DESIGN_HOTKEY.md)、[`DESIGN_QUICK_ADD.md`](DESIGN_QUICK_ADD.md) |
+| 実装済み・実機確認待ち | [`DESIGN_APP_CONTEXT.md`](DESIGN_APP_CONTEXT.md)、[`DESIGN_CHOICE.md`](DESIGN_CHOICE.md)、[`DESIGN_COPY_INTENT.md`](DESIGN_COPY_INTENT.md)、[`DESIGN_HOTKEY.md`](DESIGN_HOTKEY.md)、[`DESIGN_QUICK_ADD.md`](DESIGN_QUICK_ADD.md)、[`DESIGN_SWAP_COPY.md`](DESIGN_SWAP_COPY.md) |
 | 一部実装・残作業あり | [`DESIGN_BASE_SYNTAX.md`](DESIGN_BASE_SYNTAX.md)、[`DESIGN_BULK_APPLY.md`](DESIGN_BULK_APPLY.md)、[`DESIGN_RICH_COPY.md`](DESIGN_RICH_COPY.md) |
 | 実装保留 | [`DESIGN_IF.md`](DESIGN_IF.md) |
 | 実機確認ツール | [`tools/ClipboardProbe/README.md`](tools/ClipboardProbe/README.md) |
@@ -1142,6 +1188,9 @@ Models/ClipboardMatchKind.cs スマートアクションの表示条件
 Models/SequentialCaptureTrigger.cs 連続コピーが 1 件として集める範囲
 Services/SettingsStore.cs   JSON の読み書き
 Services/ClipboardService.cs クリップボード操作
+Services/ClipboardSnapshot.cs クリップボードの全形式をそのまま控える
+Services/InputInjector.cs   Ctrl+C / Ctrl+V を送る（SendInput）
+Services/SwapCopy.cs        選択中の文字とクリップボードの入れ替え
 Services/ClipboardMatcher.cs スマートアクションの表示条件を判定
 Services/ForegroundApp.cs   前面ウィンドウのプロセス名とタイトルを取る
 Services/AppContextMatcher.cs 前面アプリによる項目の絞り込みを判定

@@ -60,6 +60,17 @@ namespace MyTaskTray.Models
         public string MenuHotKey { get; set; } = string.Empty;
 
         /// <summary>
+        /// Swap コピー（選択中の文字列とクリップボードの入れ替え）を実行するグローバルホットキー。
+        /// 空文字なら登録しない。
+        ///
+        /// <para>
+        /// この機能はトレイメニューからは実行できない。メニューを開くと前面が移り、
+        /// 貼り付け先の選択とフォーカスが失われるため（DESIGN_SWAP_COPY.md §2）。
+        /// </para>
+        /// </summary>
+        public string SwapCopyHotKey { get; set; } = string.Empty;
+
+        /// <summary>
         /// 組み込みアクションをメニューへ表示するかどうか。キーは安定したアクション ID。
         /// 記録がないアクションは、アクション定義側の既定値を使う。
         /// </summary>
@@ -142,6 +153,7 @@ namespace MyTaskTray.Models
             ShowCopyNotification = ShowCopyNotification,
             SequentialCaptureTrigger = SequentialCaptureTrigger,
             MenuHotKey = MenuHotKey,
+            SwapCopyHotKey = SwapCopyHotKey,
             ActionStates = new(ActionStates ?? [], StringComparer.Ordinal),
             SprintAnchorDate = SprintAnchorDate,
             SprintLengthDays = SprintLengthDays,
