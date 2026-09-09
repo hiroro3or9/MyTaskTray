@@ -223,40 +223,60 @@ namespace MyTaskTray
             CategoryBox.Focus();
         }
 
-        /// <summary>
-        /// ホットキー欄で無変換キーを押したら、その名前を入力する。
-        ///
-        /// <para>
-        /// この欄は全角入力を避けるため IME を切っており、「無変換」という文字を打てない。
-        /// ローマ字（muhenkan）でも指定できるが、単体で使えるキーは押して入れられるほうが早い。
-        /// </para>
-        /// </summary>
+        /// <summary>ホットキー欄で単体指定できるキーを押したら、その名前を入力する。</summary>
         private void OnHotKeyBoxPreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key != Key.ImeNonConvert)
+            if (!TryGetStandaloneKeyName(e.Key, out string name))
             {
                 return;
             }
 
             e.Handled = true;
-            _vm.MenuHotKey = "無変換";
+            _vm.MenuHotKey = name;
             HotKeyBox.CaretIndex = HotKeyBox.Text.Length;
         }
 
-        /// <summary>
-        /// Swap コピーのホットキー欄で無変換キーを押したら、その名前を入力する。
-        /// 事情はメニュー用の欄と同じ。
-        /// </summary>
+        /// <summary>Swap コピーのホットキー欄も同じように扱う。</summary>
         private void OnSwapCopyHotKeyBoxPreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key != Key.ImeNonConvert)
+            if (!TryGetStandaloneKeyName(e.Key, out string name))
             {
                 return;
             }
 
             e.Handled = true;
-            _vm.SwapCopyHotKey = "無変換";
+            _vm.SwapCopyHotKey = name;
             SwapCopyHotKeyBox.CaretIndex = SwapCopyHotKeyBox.Text.Length;
+        }
+
+        /// <summary>
+        /// 修飾キーなしで指定できるキーの表記。押して入れられるものだけを並べる。
+        ///
+        /// <para>
+        /// 無変換と変換は、この欄が全角入力を避けるため IME を切っており、
+        /// 「無変換」という文字自体を打てない。ローマ字（muhenkan / henkan）でも
+        /// 指定できるが、押して入れられるほうが早く、打ち間違いも起きない。
+        /// アプリケーションキー・Pause・F13〜F24 も同じ扱いにする。
+        /// </para>
+        /// </summary>
+        private static bool TryGetStandaloneKeyName(Key key, out string name)
+        {
+            if (key is >= Key.F13 and <= Key.F24)
+            {
+                name = "F" + (13 + (key - Key.F13));
+                return true;
+            }
+
+            name = key switch
+            {
+                Key.ImeNonConvert => "無変換",
+                Key.ImeConvert => "変換",
+                Key.Apps => "アプリケーション",
+                Key.Pause => "Pause",
+                _ => string.Empty,
+            };
+
+            return name.Length > 0;
         }
 
         private void OnOpenAppPopup(object sender, RoutedEventArgs e)

@@ -12,8 +12,23 @@ namespace MyTaskTray.Services
         private const uint ModShift = 0x0004;
         private const uint ModWin = 0x0008;
 
+        /// <summary>Pause / Break キー（VK_PAUSE）。</summary>
+        private const uint VkPause = 0x13;
+
+        /// <summary>変換キー（VK_CONVERT）。</summary>
+        private const uint VkConvert = 0x1C;
+
         /// <summary>無変換キー（VK_NONCONVERT）。</summary>
         private const uint VkNonConvert = 0x1D;
+
+        /// <summary>アプリケーションキー（VK_APPS）。右クリックメニューを出すキー。</summary>
+        private const uint VkApps = 0x5D;
+
+        /// <summary>F13。物理キーとしては無いことが多く、割り当てソフト経由で使う。</summary>
+        private const uint VkF13 = 0x7C;
+
+        /// <summary>F24。</summary>
+        private const uint VkF24 = 0x87;
 
         /// <summary>
         /// 修飾キーなしでも登録してよいキー。
@@ -23,13 +38,46 @@ namespace MyTaskTray.Services
         /// 設定画面でも打てないため復旧できない。一方この一覧のキーは文字を入力しないので、
         /// 単体で登録しても入力そのものは壊れない（そのキー本来の機能は奪う）。
         /// </para>
+        ///
+        /// <para>
+        /// <strong>状態を持つキーは入れない。</strong>
+        /// CapsLock・NumLock・ScrollLock の反転はホットキー処理より下で起きるため、
+        /// 登録しても押すたびに状態がずれる。CapsLock を使いたい場合は、
+        /// OS 側で無変換や F13 へ割り当ててから指定する。
+        /// </para>
         /// </summary>
-        private static readonly uint[] StandaloneKeys = [VkNonConvert];
+        private static readonly uint[] StandaloneKeys =
+        [
+            VkNonConvert,
+            VkConvert,
+            VkApps,
+            VkPause,
+        ];
+
+        /// <summary>
+        /// 名前でも押しても指定できるキー。入力欄は IME を切っているので、
+        /// 日本語名のキーはローマ字表記でも受け付ける。
+        /// </summary>
+        private static readonly (string[] Names, uint VirtualKey, string DisplayName)[] NamedKeys =
+        [
+            (["無変換", "MUHENKAN", "NONCONVERT"], VkNonConvert, "無変換"),
+            (["変換", "HENKAN", "CONVERT"], VkConvert, "変換"),
+            (["アプリケーション", "APPS", "APPLICATION"], VkApps, "アプリケーション"),
+            (["PAUSE", "BREAK", "一時停止"], VkPause, "Pause"),
+        ];
+
+        /// <summary>
+        /// 修飾キーなしで登録してよいキーかどうか。
+        /// F13〜F24 は普通のキーボードに無く、奪うものが何も無いため単体で許す。
+        /// </summary>
+        private static bool IsStandaloneKey(uint virtualKey)
+            => StandaloneKeys.Contains(virtualKey)
+                || virtualKey is >= VkF13 and <= VkF24;
 
         /// <summary>
         /// Ctrl+Alt+V のような表記を解釈する。空欄は呼び出し側で「無効」として扱う。
         /// 通常の文字入力を奪わないよう、Ctrl / Alt / Win のいずれかを必須にする。
-        /// ただし <see cref="StandaloneKeys"/> のキーは単体でも登録できる。
+        /// ただし <see cref="IsStandaloneKey"/> が認めるキーは単体でも登録できる。
         /// </summary>
         public static bool TryParse(string? text, out HotKeyGesture gesture, out string error)
         {
@@ -84,7 +132,8 @@ namespace MyTaskTray.Services
 
                 if (!TryParseKey(part, out virtualKey, out keyName))
                 {
-                    error = "キーは A〜Z、0〜9、F1〜F24、無変換 のいずれかを指定してください。";
+                    error = "キーは A〜Z、0〜9、F1〜F24、無変換、変換、アプリケーション、Pause"
+                        + " のいずれかを指定してください。";
                     return false;
                 }
             }
@@ -95,10 +144,10 @@ namespace MyTaskTray.Services
                 return false;
             }
 
-            if ((modifiers & (ModControl | ModAlt | ModWin)) == 0
-                && !StandaloneKeys.Contains(virtualKey))
+            if ((modifiers & (ModControl | ModAlt | ModWin)) == 0 && !IsStandaloneKey(virtualKey))
             {
-                error = "Ctrl、Alt、Win のいずれかを含めてください（無変換は単体でも指定できます）。";
+                error = "Ctrl、Alt、Win のいずれかを含めてください"
+                    + "（無変換・変換・アプリケーション・Pause・F13〜F24 は単体でも指定できます）。";
                 return false;
             }
 
@@ -135,13 +184,16 @@ namespace MyTaskTray.Services
         {
             string key = text.Trim().ToUpperInvariant();
 
-            // 無変換は日本語キーボードにしかないが、文字を入力しないキーなので
-            // 単体でもホットキーにできる。ローマ字での表記も受け付ける
-            if (key is "無変換" or "MUHENKAN" or "NONCONVERT")
+            // 文字を入力しないキーは、名前でも指定できるようにする。
+            // 表記は NamedKeys にまとめてあり、設定画面ではキーを押しても入る
+            foreach ((string[] names, uint named, string name) in NamedKeys)
             {
-                virtualKey = VkNonConvert;
-                displayName = "無変換";
-                return true;
+                if (names.Contains(key, StringComparer.Ordinal))
+                {
+                    virtualKey = named;
+                    displayName = name;
+                    return true;
+                }
             }
 
             if (key.Length == 1)

@@ -668,17 +668,23 @@
                 <StackPanel Margin="14">
                     <TextBlock Text="メニューを表示するホットキー" FontWeight="SemiBold" />
                     <TextBlock Margin="0,4,0,10" Style="{StaticResource Hint}" TextWrapping="Wrap"
-                               Text="Ctrl+Alt+V のように入力します。空欄なら無効です。通常の文字入力を妨げないよう、Ctrl / Alt / Win のいずれかを必ず含めてください。「無変換」だけは単体で指定できます。この欄で無変換キーを押すか muhenkan と打つと入ります（登録しているあいだ、無変換キー本来の働きは使えなくなります）。" />
+                               Text="Ctrl+Alt+V のように入力します。空欄なら無効です。通常の文字入力を妨げないよう、Ctrl / Alt / Win のいずれかを必ず含めてください。ただし文字を入力しないキー（無変換・変換・アプリケーション・Pause・F13〜F24）は単体でも指定できます。この欄でそのキーを押すと入ります（登録しているあいだ、そのキー本来の働きは使えなくなります）。" />
                     <!--
                         日本語入力が有効なままだと「Ｃｔｒｌ＋Ｖ」のような全角になり、
                         見た目はほとんど同じなのに解釈だけ失敗する。この欄では IME を切る。
                         （それでも全角が入りうるため、解釈側でも半角へ揃えている）
                     -->
+                    <!--
+                        ContextMenu を外すのは、アプリケーションキーを押したときに
+                        テキストボックスの右クリックメニューが出てしまうため。
+                        この欄はキーを 1 つ決めるだけなので、貼り付けメニューは要らない。
+                    -->
                     <TextBox x:Name="HotKeyBox"
                              InputMethod.IsInputMethodEnabled="False"
+                             ContextMenu="{x:Null}"
                              PreviewKeyDown="OnHotKeyBoxPreviewKeyDown"
                              Text="{Binding MenuHotKey, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換 を指定できます" />
+                             ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換、変換、アプリケーション、Pause を指定できます" />
                     <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
                                Text="{Binding MenuHotKeyStatus}" />
 
@@ -690,9 +696,10 @@
                                Text="選択している文字をコピーし、その場へ元のクリップボードの内容を貼り付けます。次に貼り付けられるのは、選択していた文字です。空欄なら無効です。書き方はメニュー用と同じで、メニュー用と同じキーは指定できません。" />
                     <TextBox x:Name="SwapCopyHotKeyBox"
                              InputMethod.IsInputMethodEnabled="False"
+                             ContextMenu="{x:Null}"
                              PreviewKeyDown="OnSwapCopyHotKeyBoxPreviewKeyDown"
                              Text="{Binding SwapCopyHotKey, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換 を指定できます" />
+                             ToolTip="キーは A〜Z、0〜9、F1〜F24、無変換、変換、アプリケーション、Pause を指定できます" />
                     <TextBlock Margin="0,8,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
                                Text="{Binding SwapCopyHotKeyStatus}" />
                 </StackPanel>
