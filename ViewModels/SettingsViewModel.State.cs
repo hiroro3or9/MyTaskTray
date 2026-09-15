@@ -113,6 +113,7 @@ namespace MyTaskTray.ViewModels
             }
 
             return item.Name.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
+                || item.ExpansionTrigger.Contains(_filterText, StringComparison.OrdinalIgnoreCase)
                 || item.Text.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
                 || item.Category.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
                 || item.ClipboardPattern.Contains(_filterText, StringComparison.CurrentCultureIgnoreCase)
@@ -179,6 +180,7 @@ namespace MyTaskTray.ViewModels
             switch (e.PropertyName)
             {
                 case nameof(ClipItem.Name):
+                case nameof(ClipItem.ExpansionTrigger):
                 case nameof(ClipItem.Text):
                 case nameof(ClipItem.Category):
                 case nameof(ClipItem.CategoryId):

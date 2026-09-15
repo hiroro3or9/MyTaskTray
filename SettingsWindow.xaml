@@ -410,7 +410,9 @@
                                 ToolTip="中の項目は削除せず、トップレベルへ移します" />
                     </Grid>
 
-                    <Grid Margin="16" Visibility="{Binding IsItemEditable, Converter={StaticResource BoolToVis}}">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  Visibility="{Binding IsItemEditable, Converter={StaticResource BoolToVis}}">
+                    <Grid Margin="16">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -448,6 +450,17 @@
                         </StackPanel>
 
                         <StackPanel Grid.Row="3">
+
+                            <Expander x:Name="TextExpansionExpander" Header="文字入力で自動展開" Margin="0,0,0,10"
+                                      Foreground="{DynamicResource Brush.Text}">
+                                <StackPanel Margin="10,6,10,0">
+                                    <TextBlock Text="呼び出し文字列（空欄で無効）" Style="{StaticResource FieldLabel}" />
+                                    <TextBox x:Name="ExpansionTriggerBox" MaxLength="32"
+                                             Text="{Binding SelectedItem.ExpansionTrigger, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,5,0,0"
+                                               Text="例: ;sig　IME オフで打ち終えると本文に置き換えます。大文字・小文字を区別します。通常のテキスト項目で使用でき、展開後の本文はクリップボードにも残ります。" />
+                                </StackPanel>
+                            </Expander>
 
                             <!-- スマートアクションの条件 -->
                             <Expander x:Name="SmartActionExpander" Margin="0,0,0,10"
@@ -567,7 +580,7 @@
                                  VerticalScrollBarVisibility="Auto"
                                  VerticalContentAlignment="Top"
                                  FontFamily="Consolas, Yu Gothic UI"
-                                 Text="{Binding SelectedItem.Text, UpdateSourceTrigger=PropertyChanged}" />
+                                 MaxHeight="300" Text="{Binding SelectedItem.Text, UpdateSourceTrigger=PropertyChanged}" />
 
                         <!-- 連番の設定（{seq} を使っているときだけ表示） -->
                         <Border Grid.Row="6" Margin="0,12,0,0" Padding="12,10" CornerRadius="6"
@@ -623,6 +636,7 @@
                                      Text="{Binding Preview, Mode=OneWay}" />
                         </StackPanel>
                     </Grid>
+                    </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>

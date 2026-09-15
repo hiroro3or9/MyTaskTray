@@ -314,6 +314,7 @@ namespace MyTaskTray
             _notifyIcon.Visible = true;
             RegisterMenuHotKey();
             RegisterSwapCopyHotKey();
+            RegisterTextExpansion();
         }
 
         /// <summary>
@@ -369,6 +370,7 @@ namespace MyTaskTray
             RebuildMenu();
             RegisterMenuHotKey();
             RegisterSwapCopyHotKey();
+            RegisterTextExpansion();
         }
 
         private void OnIconMouseUp(object? sender, MouseEventArgs e)
@@ -1849,6 +1851,8 @@ namespace MyTaskTray
             }
 
             _disposed = true;
+            _textExpansion?.Dispose();
+            _textExpansion = null;
             ThemeManager.ThemeChanged -= OnThemeChanged;
             _actionSessions.Dispose();
             CloseSequentialProgressPanel();

@@ -51,6 +51,20 @@ namespace MyTaskTray.Services
         /// <summary>Ctrl+V を送る。すべての入力を送れたら true。</summary>
         public static bool TrySendPaste() => TrySendControlShortcut(VkV);
 
+        /// <summary>合図の削除と貼り付けをひとまとまりで送る。本文の改行は Enter キーにしない。</summary>
+        public static bool TryReplaceTrigger(int length)
+        {
+            if (length is < 2 or > 32 || ModifierKeys.Any(IsKeyDown)) return false;
+            List<Input> inputs = [];
+            for (int index = 0; index < length; index++)
+            {
+                inputs.Add(KeyDown(0x08));
+                inputs.Add(KeyUp(0x08));
+            }
+            inputs.AddRange([KeyDown(VkControl), KeyDown(VkV), KeyUp(VkV), KeyUp(VkControl)]);
+            return Send([.. inputs]);
+        }
+
         /// <summary>
         /// 押されたままの修飾キーを、離した状態にする。
         ///

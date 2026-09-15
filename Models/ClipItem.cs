@@ -13,6 +13,7 @@ namespace MyTaskTray.Models
         public const int InitialSequenceValue = 1;
 
         private string _name = string.Empty;
+        private string _expansionTrigger = string.Empty;
         private string _text = string.Empty;
         private string _category = string.Empty;
         private string _categoryId = string.Empty;
@@ -43,6 +44,13 @@ namespace MyTaskTray.Models
         {
             get => _name;
             set => Set(ref _name, value ?? string.Empty, nameof(Name), nameof(DisplayName), nameof(DisplayLabel));
+        }
+
+        /// <summary>自動展開の合図。空欄は無効。IME オフで入力する半角文字列。</summary>
+        public string ExpansionTrigger
+        {
+            get => _expansionTrigger;
+            set => Set(ref _expansionTrigger, value ?? string.Empty, nameof(ExpansionTrigger));
         }
 
         /// <summary>
@@ -337,6 +345,7 @@ namespace MyTaskTray.Models
         {
             Id = Id,
             Name = Name,
+            ExpansionTrigger = ExpansionTrigger,
             Text = Text,
             Category = Category,
             CategoryId = CategoryId,

@@ -174,6 +174,17 @@ namespace MyTaskTray
                 return false;
             }
 
+            if (!TextExpansionMatcher.TryValidate(_vm.Items, out ClipItem? expansionItem, out string expansionError))
+            {
+                MessageBox.Show(expansionError, "自動展開の設定を保存できません", MessageBoxButton.OK, MessageBoxImage.Warning);
+                ClearFilter();
+                _vm.SelectedItem = expansionItem;
+                if (expansionItem is not null) ItemsList.ScrollIntoView(expansionItem);
+                TextExpansionExpander.IsExpanded = true;
+                Dispatcher.BeginInvoke(new Action(() => ExpansionTriggerBox.Focus()), DispatcherPriority.Input);
+                return false;
+            }
+
             if (!_vm.TryValidateSmartConditions(out ClipItem? invalidItem, out string conditionError))
             {
                 // 正規表現はスマートアクションとアプリ条件の両方にあるため、
