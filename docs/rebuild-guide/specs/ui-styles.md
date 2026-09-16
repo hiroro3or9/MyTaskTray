@@ -1,0 +1,527 @@
+# 共通コントロールの外観・状態仕様
+
+単位はDIP。箇条書きのインデントは親子構造。属性未指定はWPF既定/親からの継承。Bindingは同名の表示状態・編集値へ接続する。イベント名は役割を識別するラベルで、段階別の動作仕様へ結び付ける。DynamicResourceはテーマ色、StaticResourceは共通スタイル。これは画面を再構成するための設計表であり、元XAMLファイルの添付ではない。
+
+
+## 
+Style
+ 
+
+ 
+Button
+
+- **Style** — TargetType=Button
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Control.Bg}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Border.Strong}
+  - **Setter** — Property=BorderThickness ; Value=1
+  - **Setter** — Property=Padding ; Value=12,5
+  - **Setter** — Property=MinHeight ; Value=30
+  - **Setter** — Property=Cursor ; Value=Hand
+  - **Setter** — Property=SnapsToDevicePixels ; Value=True
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=Button
+        - **Border** — x:Name=Bd ; CornerRadius=5 ; Background={TemplateBinding Background} ; BorderBrush={TemplateBinding BorderBrush} ; BorderThickness={TemplateBinding BorderThickness}
+          - **ContentPresenter** — Margin={TemplateBinding Padding} ; HorizontalAlignment={TemplateBinding HorizontalContentAlignment} ; VerticalAlignment={TemplateBinding VerticalContentAlignment}
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsMouseOver ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Control.Hover}
+          - **Trigger** — Property=IsPressed ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Control.Pressed}
+          - **Trigger** — Property=IsKeyboardFocused ; Value=True
+            - **Setter** — TargetName=Bd ; Property=BorderBrush ; Value={DynamicResource Brush.Accent}
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — TargetName=Bd ; Property=Opacity ; Value=0.45
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Disabled}
+            - **Setter** — Property=Cursor ; Value=Arrow
+  - **Setter** — Property=HorizontalContentAlignment ; Value=Center
+  - **Setter** — Property=VerticalContentAlignment ; Value=Center
+
+## 
+Style
+ 
+AccentButton
+ 
+Button
+
+- **Style** — x:Key=AccentButton ; TargetType=Button ; BasedOn={StaticResource {x:Type Button}}
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.OnAccent}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Accent}
+  - **Setter** — Property=FontWeight ; Value=SemiBold
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=Button
+        - **Border** — x:Name=Bd ; CornerRadius=5 ; Background={TemplateBinding Background}
+          - **ContentPresenter** — Margin={TemplateBinding Padding} ; HorizontalAlignment=Center ; VerticalAlignment=Center
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsMouseOver ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Accent.Hover}
+          - **Trigger** — Property=IsPressed ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Accent.Pressed}
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — TargetName=Bd ; Property=Opacity ; Value=0.45
+            - **Setter** — Property=Cursor ; Value=Arrow
+
+## 
+Style
+ 
+IconButton
+ 
+Button
+
+- **Style** — x:Key=IconButton ; TargetType=Button ; BasedOn={StaticResource {x:Type Button}}
+  - **Setter** — Property=Padding ; Value=0
+  - **Setter** — Property=Width ; Value=32
+  - **Setter** — Property=Height ; Value=30
+  - **Setter** — Property=FontSize ; Value=11
+
+## 
+Style
+ 
+SubtleButton
+ 
+Button
+
+- **Style** — x:Key=SubtleButton ; TargetType=Button ; BasedOn={StaticResource {x:Type Button}}
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Secondary}
+  - **Setter** — Property=Background ; Value=Transparent
+  - **Setter** — Property=BorderThickness ; Value=0
+  - **Setter** — Property=Padding ; Value=8,4
+  - **Setter** — Property=MinHeight ; Value=26
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=Button
+        - **Border** — x:Name=Bd ; CornerRadius=5 ; Background={TemplateBinding Background}
+          - **ContentPresenter** — Margin={TemplateBinding Padding} ; HorizontalAlignment={TemplateBinding HorizontalContentAlignment} ; VerticalAlignment=Center
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsMouseOver ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Hover}
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+          - **Trigger** — Property=IsPressed ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Pressed}
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Disabled}
+            - **Setter** — Property=Cursor ; Value=Arrow
+
+## 
+Style
+ 
+RowButton
+ 
+Button
+
+- **Style** — x:Key=RowButton ; TargetType=Button ; BasedOn={StaticResource SubtleButton}
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=HorizontalContentAlignment ; Value=Stretch
+  - **Setter** — Property=Padding ; Value=8,5
+  - **Setter** — Property=MinHeight ; Value=0
+
+## 
+Style
+ 
+
+ 
+TextBox
+
+- **Style** — TargetType=TextBox
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Input.Bg}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Border.Strong}
+  - **Setter** — Property=BorderThickness ; Value=1
+  - **Setter** — Property=Padding ; Value=7,5
+  - **Setter** — Property=CaretBrush ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=SelectionBrush ; Value={DynamicResource Brush.Accent}
+  - **Setter** — Property=SnapsToDevicePixels ; Value=True
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=TextBox
+        - **Border** — x:Name=Bd ; CornerRadius=5 ; Background={TemplateBinding Background} ; BorderBrush={TemplateBinding BorderBrush} ; BorderThickness={TemplateBinding BorderThickness}
+          - **ScrollViewer** — x:Name=PART_ContentHost ; Focusable=False ; Margin={TemplateBinding Padding} ; VerticalScrollBarVisibility={TemplateBinding VerticalScrollBarVisibility} ; HorizontalScrollBarVisibility={TemplateBinding HorizontalScrollBarVisibility}
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsKeyboardFocusWithin ; Value=True
+            - **Setter** — TargetName=Bd ; Property=BorderBrush ; Value={DynamicResource Brush.Accent}
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — TargetName=Bd ; Property=Opacity ; Value=0.6
+          - **Trigger** — Property=IsReadOnly ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Preview.Bg}
+
+## 
+Style
+ 
+
+ 
+ComboBox
+
+- **Style** — TargetType=ComboBox
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Input.Bg}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Border.Strong}
+  - **Setter** — Property=BorderThickness ; Value=1
+  - **Setter** — Property=Padding ; Value=7,4
+  - **Setter** — Property=MinHeight ; Value=30
+  - **Setter** — Property=MaxDropDownHeight ; Value=320
+  - **Setter** — Property=HorizontalContentAlignment ; Value=Stretch
+  - **Setter** — Property=VerticalContentAlignment ; Value=Center
+  - **Setter** — Property=SnapsToDevicePixels ; Value=True
+  - **Setter** — Property=ScrollViewer.CanContentScroll ; Value=True
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=ComboBox
+        - **Grid**
+          - **ToggleButton** — x:Name=DropDownToggle ; Focusable=False ; ClickMode=Press ; IsChecked={Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay} ; Background={TemplateBinding Background} ; BorderBrush={TemplateBinding BorderBrush} ; BorderThickness={TemplateBinding BorderThickness}
+            - **ToggleButton.Template**
+              - **ControlTemplate** — TargetType=ToggleButton
+                - **Border** — x:Name=Bd ; CornerRadius=5 ; Background={TemplateBinding Background} ; BorderBrush={TemplateBinding BorderBrush} ; BorderThickness={TemplateBinding BorderThickness}
+                - **ControlTemplate.Triggers**
+                  - **Trigger** — Property=IsMouseOver ; Value=True
+                    - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Control.Hover}
+                  - **Trigger** — Property=IsPressed ; Value=True
+                    - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Control.Pressed}
+          - **ContentPresenter** — x:Name=SelectionContent ; Margin=7,4,28,4 ; HorizontalAlignment={TemplateBinding HorizontalContentAlignment} ; VerticalAlignment={TemplateBinding VerticalContentAlignment} ; IsHitTestVisible=False ; TextElement.Foreground={TemplateBinding Foreground} ; Content={TemplateBinding SelectionBoxItem} ; ContentTemplate={TemplateBinding SelectionBoxItemTemplate} ; ContentTemplateSelector={TemplateBinding ItemTemplateSelector}
+          - **Path** — Width=8 ; Height=4 ; Margin=0,0,10,0 ; HorizontalAlignment=Right ; VerticalAlignment=Center ; IsHitTestVisible=False ; Fill={DynamicResource Brush.Text.Secondary} ; Data=M 0,0 L 4,4 L 8,0 Z
+          - **Popup** — x:Name=PART_Popup ; Placement=Bottom ; PlacementTarget={Binding ElementName=DropDownToggle} ; AllowsTransparency=True ; Focusable=False ; IsOpen={TemplateBinding IsDropDownOpen} ; PopupAnimation=Fade
+            - **Border** — x:Name=DropDownBorder ; MinWidth={Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}} ; MaxHeight={TemplateBinding MaxDropDownHeight} ; Margin=0,2,0,0 ; CornerRadius=5 ; Background={DynamicResource Brush.Surface} ; BorderBrush={DynamicResource Brush.Border.Strong} ; BorderThickness=1 ; SnapsToDevicePixels=True
+              - **ScrollViewer** — Margin=1
+                - **ItemsPresenter** — KeyboardNavigation.DirectionalNavigation=Contained
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsKeyboardFocusWithin ; Value=True
+            - **Setter** — TargetName=DropDownToggle ; Property=BorderBrush ; Value={DynamicResource Brush.Accent}
+          - **Trigger** — Property=HasItems ; Value=False
+            - **Setter** — TargetName=DropDownBorder ; Property=MinHeight ; Value=30
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Disabled}
+            - **Setter** — TargetName=DropDownToggle ; Property=Opacity ; Value=0.6
+
+## 
+Style
+ 
+
+ 
+ComboBoxItem
+
+- **Style** — TargetType=ComboBoxItem
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Surface}
+  - **Setter** — Property=Padding ; Value=8,5
+  - **Setter** — Property=HorizontalContentAlignment ; Value=Stretch
+  - **Setter** — Property=SnapsToDevicePixels ; Value=True
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=ComboBoxItem
+        - **Border** — x:Name=Bd ; Background={TemplateBinding Background} ; Padding={TemplateBinding Padding}
+          - **ContentPresenter** — HorizontalAlignment={TemplateBinding HorizontalContentAlignment} ; VerticalAlignment=Center
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsHighlighted ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Hover}
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+          - **Trigger** — Property=IsSelected ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Selected}
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Disabled}
+
+## 
+Style
+ 
+
+ 
+Expander
+
+- **Style** — TargetType=Expander
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+
+## 
+Style
+ 
+
+ 
+CheckBox
+
+- **Style** — TargetType=CheckBox
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Cursor ; Value=Hand
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=CheckBox
+        - **StackPanel** — Orientation=Horizontal ; Background=Transparent
+          - **Border** — x:Name=Box ; Width=17 ; Height=17 ; CornerRadius=4 ; BorderThickness=1 ; BorderBrush={DynamicResource Brush.Border.Strong} ; Background={DynamicResource Brush.Input.Bg} ; VerticalAlignment=Center ; SnapsToDevicePixels=True
+            - **Path** — x:Name=Check ; Data=M 3,7.5 L 6.3,10.8 L 12,4 ; Stroke={DynamicResource Brush.OnAccent} ; StrokeThickness=1.7 ; StrokeStartLineCap=Round ; StrokeEndLineCap=Round ; Visibility=Collapsed
+          - **ContentPresenter** — Margin=7,0,0,0 ; VerticalAlignment=Center
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsMouseOver ; Value=True
+            - **Setter** — TargetName=Box ; Property=BorderBrush ; Value={DynamicResource Brush.Accent}
+          - **Trigger** — Property=IsChecked ; Value=True
+            - **Setter** — TargetName=Box ; Property=Background ; Value={DynamicResource Brush.Accent}
+            - **Setter** — TargetName=Box ; Property=BorderBrush ; Value={DynamicResource Brush.Accent}
+            - **Setter** — TargetName=Check ; Property=Visibility ; Value=Visible
+          - **Trigger** — Property=IsEnabled ; Value=False
+            - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Disabled}
+            - **Setter** — TargetName=Box ; Property=Opacity ; Value=0.5
+
+## 
+Style
+ 
+
+ 
+ListBox
+
+- **Style** — TargetType=ListBox
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Background ; Value=Transparent
+  - **Setter** — Property=BorderThickness ; Value=0
+  - **Setter** — Property=Padding ; Value=0
+  - **Setter** — Property=ScrollViewer.HorizontalScrollBarVisibility ; Value=Disabled
+
+## 
+Style
+ 
+
+ 
+ListBoxItem
+
+- **Style** — TargetType=ListBoxItem
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Padding ; Value=8,6
+  - **Setter** — Property=HorizontalContentAlignment ; Value=Stretch
+  - **Setter** — Property=SnapsToDevicePixels ; Value=True
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=ListBoxItem
+        - **Grid**
+          - **Border** — x:Name=Bd ; Background=Transparent ; CornerRadius=5 ; Margin=0,1
+            - **Grid**
+              - **Grid.ColumnDefinitions**
+                - **ColumnDefinition** — Width=Auto
+                - **ColumnDefinition** — Width=*
+              - **Border** — x:Name=Bar ; Grid.Column=0 ; Width=3 ; Height=18 ; CornerRadius=2 ; Margin=3,0,0,0 ; VerticalAlignment=Center ; Background={DynamicResource Brush.Accent} ; Visibility=Hidden
+              - **ContentPresenter** — Grid.Column=1 ; Margin={TemplateBinding Padding} ; HorizontalAlignment={TemplateBinding HorizontalContentAlignment} ; VerticalAlignment=Center
+          - **Border** — x:Name=DropTop ; Height=2 ; VerticalAlignment=Top ; Visibility=Collapsed ; Background={DynamicResource Brush.Accent}
+          - **Border** — x:Name=DropBottom ; Height=2 ; VerticalAlignment=Bottom ; Visibility=Collapsed ; Background={DynamicResource Brush.Accent}
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsMouseOver ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Hover}
+          - **Trigger** — Property=IsSelected ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.Selected}
+            - **Setter** — TargetName=Bar ; Property=Visibility ; Value=Visible
+          - **Trigger** — Property=local:DropIndicator.Position ; Value=Above
+            - **Setter** — TargetName=DropTop ; Property=Visibility ; Value=Visible
+          - **Trigger** — Property=local:DropIndicator.Position ; Value=Below
+            - **Setter** — TargetName=DropBottom ; Property=Visibility ; Value=Visible
+
+## 
+Style
+ 
+ScrollBar.Thumb
+ 
+Thumb
+
+- **Style** — x:Key=ScrollBar.Thumb ; TargetType=Thumb
+  - **Setter** — Property=OverridesDefaultStyle ; Value=True
+  - **Setter** — Property=IsTabStop ; Value=False
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=Thumb
+        - **Border** — x:Name=Bd ; CornerRadius=3 ; Margin=2 ; Background={DynamicResource Brush.ScrollThumb}
+        - **ControlTemplate.Triggers**
+          - **Trigger** — Property=IsMouseOver ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.ScrollThumb.Hover}
+          - **Trigger** — Property=IsDragging ; Value=True
+            - **Setter** — TargetName=Bd ; Property=Background ; Value={DynamicResource Brush.ScrollThumb.Hover}
+
+## 
+Style
+ 
+ScrollBar.PageButton
+ 
+RepeatButton
+
+- **Style** — x:Key=ScrollBar.PageButton ; TargetType=RepeatButton
+  - **Setter** — Property=OverridesDefaultStyle ; Value=True
+  - **Setter** — Property=Focusable ; Value=False
+  - **Setter** — Property=IsTabStop ; Value=False
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=RepeatButton
+        - **Border** — Background=Transparent
+
+## 
+Style
+ 
+
+ 
+ScrollBar
+
+- **Style** — TargetType=ScrollBar
+  - **Setter** — Property=Background ; Value=Transparent
+  - **Setter** — Property=Width ; Value=11
+  - **Setter** — Property=MinWidth ; Value=11
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=ScrollBar
+        - **Grid** — Background={TemplateBinding Background}
+          - **Track** — x:Name=PART_Track ; Orientation={TemplateBinding Orientation} ; IsDirectionReversed=True
+            - **Track.DecreaseRepeatButton**
+              - **RepeatButton** — Style={StaticResource ScrollBar.PageButton} ; Command=ScrollBar.PageUpCommand
+            - **Track.Thumb**
+              - **Thumb** — Style={StaticResource ScrollBar.Thumb}
+            - **Track.IncreaseRepeatButton**
+              - **RepeatButton** — Style={StaticResource ScrollBar.PageButton} ; Command=ScrollBar.PageDownCommand
+  - **Style.Triggers**
+    - **Trigger** — Property=Orientation ; Value=Horizontal
+      - **Setter** — Property=Width ; Value=Auto
+      - **Setter** — Property=MinWidth ; Value=0
+      - **Setter** — Property=Height ; Value=11
+      - **Setter** — Property=MinHeight ; Value=11
+      - **Setter** — Property=Template
+        - **Setter.Value**
+          - **ControlTemplate** — TargetType=ScrollBar
+            - **Grid** — Background={TemplateBinding Background}
+              - **Track** — x:Name=PART_Track ; Orientation={TemplateBinding Orientation} ; IsDirectionReversed=False
+                - **Track.DecreaseRepeatButton**
+                  - **RepeatButton** — Style={StaticResource ScrollBar.PageButton} ; Command=ScrollBar.PageLeftCommand
+                - **Track.Thumb**
+                  - **Thumb** — Style={StaticResource ScrollBar.Thumb}
+                - **Track.IncreaseRepeatButton**
+                  - **RepeatButton** — Style={StaticResource ScrollBar.PageButton} ; Command=ScrollBar.PageRightCommand
+
+## 
+Style
+ 
+
+ 
+ToolTip
+
+- **Style** — TargetType=ToolTip
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Surface}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Border.Strong}
+  - **Setter** — Property=BorderThickness ; Value=1
+  - **Setter** — Property=Padding ; Value=9,6
+  - **Setter** — Property=HasDropShadow ; Value=True
+  - **Setter** — Property=Template
+    - **Setter.Value**
+      - **ControlTemplate** — TargetType=ToolTip
+        - **Border** — CornerRadius=5 ; Background={TemplateBinding Background} ; BorderBrush={TemplateBinding BorderBrush} ; BorderThickness={TemplateBinding BorderThickness}
+          - **ContentPresenter** — Margin={TemplateBinding Padding}
+
+## 
+Style
+ 
+
+ 
+GridSplitter
+
+- **Style** — TargetType=GridSplitter
+  - **Setter** — Property=Background ; Value=Transparent
+  - **Setter** — Property=Focusable ; Value=False
+
+## 
+Style
+ 
+Card
+ 
+Border
+
+- **Style** — x:Key=Card ; TargetType=Border
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Surface}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Border}
+  - **Setter** — Property=BorderThickness ; Value=1
+  - **Setter** — Property=CornerRadius ; Value=8
+
+## 
+Style
+ 
+Badge
+ 
+Border
+
+- **Style** — x:Key=Badge ; TargetType=Border
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Badge.Bg}
+  - **Setter** — Property=CornerRadius ; Value=9
+  - **Setter** — Property=Padding ; Value=7,1
+  - **Setter** — Property=Margin ; Value=4,0,0,0
+  - **Setter** — Property=VerticalAlignment ; Value=Center
+
+## 
+Style
+ 
+BadgeText
+ 
+TextBlock
+
+- **Style** — x:Key=BadgeText ; TargetType=TextBlock
+  - **Setter** — Property=FontSize ; Value=10.5
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Badge.Text}
+
+## 
+Style
+ 
+SeqBadge
+ 
+Border
+
+- **Style** — x:Key=SeqBadge ; TargetType=Border ; BasedOn={StaticResource Badge}
+  - **Setter** — Property=Background ; Value={DynamicResource Brush.Seq.Bg}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Seq.Border}
+  - **Setter** — Property=BorderThickness ; Value=1
+
+## 
+Style
+ 
+SeqBadgeText
+ 
+TextBlock
+
+- **Style** — x:Key=SeqBadgeText ; TargetType=TextBlock ; BasedOn={StaticResource BadgeText}
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Seq.Text}
+
+## 
+Style
+ 
+FieldLabel
+ 
+TextBlock
+
+- **Style** — x:Key=FieldLabel ; TargetType=TextBlock
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Secondary}
+  - **Setter** — Property=FontSize ; Value=11.5
+  - **Setter** — Property=Margin ; Value=0,0,0,4
+  - **Setter** — Property=TextWrapping ; Value=Wrap
+
+## 
+Style
+ 
+SectionTitle
+ 
+TextBlock
+
+- **Style** — x:Key=SectionTitle ; TargetType=TextBlock
+  - **Setter** — Property=FontWeight ; Value=SemiBold
+  - **Setter** — Property=FontSize ; Value=13
+
+## 
+Style
+ 
+Hint
+ 
+TextBlock
+
+- **Style** — x:Key=Hint ; TargetType=TextBlock
+  - **Setter** — Property=Foreground ; Value={DynamicResource Brush.Text.Secondary}
+  - **Setter** — Property=FontSize ; Value=11
+  - **Setter** — Property=TextWrapping ; Value=Wrap
+
+## 
+Style
+ 
+PopupCard
+ 
+Border
+
+- **Style** — x:Key=PopupCard ; TargetType=Border ; BasedOn={StaticResource Card}
+  - **Setter** — Property=BorderBrush ; Value={DynamicResource Brush.Border.Strong}
+  - **Setter** — Property=CornerRadius ; Value=7
+  - **Setter** — Property=Effect
+    - **Setter.Value**
+      - **DropShadowEffect** — BlurRadius=16 ; ShadowDepth=3 ; Opacity=0.28 ; Color=Black

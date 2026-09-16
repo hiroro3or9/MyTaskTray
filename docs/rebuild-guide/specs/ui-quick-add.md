@@ -1,0 +1,54 @@
+# QuickAddWindow の画面仕様
+
+単位はDIP。箇条書きのインデントは親子構造。属性未指定はWPF既定/親からの継承。Bindingは同名の表示状態・編集値へ接続する。イベント名は役割を識別するラベルで、段階別の動作仕様へ結び付ける。DynamicResourceはテーマ色、StaticResourceは共通スタイル。これは画面を再構成するための設計表であり、元XAMLファイルの添付ではない。
+
+- **Window** — x:Class=MyTaskTray.QuickAddWindow ; Title=項目として追加 ; SizeToContent=Height ; Width=440 ; ResizeMode=NoResize ; ShowInTaskbar=False ; Topmost=True ; WindowStartupLocation=Manual ; FontFamily=Yu Gothic UI ; FontSize=13 ; Background={DynamicResource Brush.Window.Bg} ; Foreground={DynamicResource Brush.Text} ; PreviewKeyDown=OnWindowPreviewKeyDown ; Loaded=OnLoaded
+  - **Border** — Margin=16 ; Padding=16,14 ; CornerRadius=8 ; Background={DynamicResource Brush.Surface} ; BorderBrush={DynamicResource Brush.Border} ; BorderThickness=1
+    - **StackPanel**
+      - **TextBlock** — Text=クリップボードを項目に追加 ; FontWeight=SemiBold ; Margin=0,0,0,10
+      - **TextBlock** — Text=メニューに表示する名前 ; Style={StaticResource FieldLabel}
+      - **TextBox** — x:Name=NameBox ; MaxLength=120
+      - **TextBlock** — Margin=0,12,0,4 ; Style={StaticResource FieldLabel} ; Text=追加先（名前を入力して新しいカテゴリも作れます）
+      - **Grid**
+        - **Grid.ColumnDefinitions**
+          - **ColumnDefinition** — Width=*
+          - **ColumnDefinition** — Width=Auto
+        - **TextBox** — x:Name=CategoryBox ; Grid.Column=0 ; TextChanged=OnCategoryBoxTextChanged ; GotKeyboardFocus=OnCategoryBoxGotKeyboardFocus
+        - **TextBlock** — x:Name=CategoryPlaceholder ; Grid.Column=0 ; Text=トップレベル ; Margin=9,0,0,0 ; VerticalAlignment=Center ; IsHitTestVisible=False ; Foreground={DynamicResource Brush.Text.Disabled}
+        - **Button** — Grid.Column=1 ; Content=▾ ; Margin=5,0,0,0 ; Style={StaticResource IconButton} ; ToolTip=既存の追加先から選ぶ ; Click=OnOpenCategoryPopup
+      - **Popup** — x:Name=CategoryPopup ; StaysOpen=False ; AllowsTransparency=True ; Focusable=True ; Placement=Bottom ; PlacementTarget={Binding ElementName=CategoryBox} ; VerticalOffset=4
+        - **Border** — Style={StaticResource PopupCard} ; MinWidth=180 ; Margin=10
+          - **DockPanel** — Margin=8
+            - **Button** — DockPanel.Dock=Top ; Style={StaticResource RowButton} ; Content=トップレベル ; FontWeight=SemiBold ; HorizontalContentAlignment=Left ; Click=OnPickTopLevel
+            - **Border** — DockPanel.Dock=Top ; Height=1 ; Margin=4,5 ; Background={DynamicResource Brush.Separator}
+            - **ScrollViewer** — MaxHeight=220 ; VerticalScrollBarVisibility=Auto
+              - **ItemsControl** — x:Name=CategoryList
+                - **ItemsControl.ItemTemplate**
+                  - **DataTemplate**
+                    - **Button** — Style={StaticResource RowButton} ; Click=OnPickCategory ; HorizontalContentAlignment=Left
+                      - **Grid** — Width=240
+                        - **Grid.ColumnDefinitions**
+                          - **ColumnDefinition** — Width=18
+                          - **ColumnDefinition** — Width=22
+                          - **ColumnDefinition** — Width=*
+                        - **Ellipse** — Grid.Column=0 ; Width=9 ; Height=9 ; Fill={Binding ColorBrush} ; Stroke={DynamicResource Brush.Border.Strong} ; StrokeThickness=0.7
+                          - **Ellipse.Style**
+                            - **Style** — TargetType=Ellipse
+                              - **Style.Triggers**
+                                - **DataTrigger** — Binding={Binding HasColor} ; Value=False
+                                  - **Setter** — Property=Visibility ; Value=Collapsed
+                        - **TextBlock** — Grid.Column=1 ; Text={Binding IconGlyph} ; FontFamily={Binding IconFontFamily} ; FontSize=13 ; Foreground={Binding IconBrush} ; HorizontalAlignment=Center ; VerticalAlignment=Center
+                          - **TextBlock.Style**
+                            - **Style** — TargetType=TextBlock
+                              - **Style.Triggers**
+                                - **DataTrigger** — Binding={Binding HasIcon} ; Value=False
+                                  - **Setter** — Property=Visibility ; Value=Collapsed
+                        - **TextBlock** — Grid.Column=2 ; Text={Binding Name} ; Margin=4,0,0,0 ; VerticalAlignment=Center
+      - **TextBlock** — Margin=0,12,0,4 ; Style={StaticResource FieldLabel} ; Text=登録される文字列
+      - **Border** — Padding=9,7 ; CornerRadius=6 ; Background={DynamicResource Brush.Surface.Alt} ; BorderBrush={DynamicResource Brush.Border} ; BorderThickness=1
+        - **TextBlock** — x:Name=PreviewText ; MaxHeight=60 ; TextWrapping=Wrap ; FontFamily=Consolas, Yu Gothic UI ; FontSize=12 ; TextTrimming=CharacterEllipsis ; Foreground={DynamicResource Brush.Text.Secondary}
+      - **TextBlock** — x:Name=EscapeHint ; Margin=0,7,0,0 ; TextWrapping=Wrap ; FontSize=11 ; Visibility=Collapsed ; Foreground={DynamicResource Brush.Text.Secondary} ; Text=波かっこはそのままの文字として登録します。差し込みとして使う場合は、追加後に設定画面で { } に直してください。
+      - **StackPanel** — Orientation=Horizontal ; HorizontalAlignment=Right ; Margin=0,14,0,0
+        - **TextBlock** — Text=Enter で追加 / Esc で中止 ; VerticalAlignment=Center ; FontSize=11 ; Margin=0,0,12,0 ; Foreground={DynamicResource Brush.Text.Secondary}
+        - **Button** — Content=キャンセル ; Padding=14,4 ; MinHeight=28 ; Click=OnCancel
+        - **Button** — Content=追加 ; Padding=14,4 ; MinHeight=28 ; Margin=8,0,0,0 ; IsDefault=True ; Click=OnAccept

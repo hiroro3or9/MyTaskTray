@@ -1,0 +1,68 @@
+# SequentialProgressWindow の画面仕様
+
+単位はDIP。箇条書きのインデントは親子構造。属性未指定はWPF既定/親からの継承。Bindingは同名の表示状態・編集値へ接続する。イベント名は役割を識別するラベルで、段階別の動作仕様へ結び付ける。DynamicResourceはテーマ色、StaticResourceは共通スタイル。これは画面を再構成するための設計表であり、元XAMLファイルの添付ではない。
+
+- **Window** — x:Class=MyTaskTray.SequentialProgressWindow ; Title=連続コピー＆ペーストの進捗 ; Width=392 ; SizeToContent=Height ; WindowStyle=None ; AllowsTransparency=True ; Background=Transparent ; ResizeMode=NoResize ; ShowInTaskbar=False ; ShowActivated=False ; Topmost=True ; Focusable=False ; FontFamily=Yu Gothic UI ; FontSize=12.5 ; Foreground={DynamicResource Brush.Text}
+  - **Window.Resources**
+    - **BooleanToVisibilityConverter** — x:Key=ProgressBoolToVis
+    - **Style** — TargetType=Button ; BasedOn={StaticResource {x:Type Button}}
+      - **Setter** — Property=Focusable ; Value=False
+  - **Border** — Margin=10 ; Padding=16,14 ; CornerRadius=10 ; Background={DynamicResource Brush.Toast.Bg} ; BorderBrush={DynamicResource Brush.Toast.Border} ; BorderThickness=1
+    - **Border.Effect**
+      - **DropShadowEffect** — BlurRadius=14 ; ShadowDepth=2 ; Opacity=0.22
+    - **ScrollViewer** — VerticalScrollBarVisibility=Auto ; HorizontalScrollBarVisibility=Disabled ; Focusable=False
+      - **StackPanel**
+        - **DockPanel** — Margin=0,0,0,10
+          - **Button** — DockPanel.Dock=Right ; Content=キャンセル ; Click=OnCancel ; Focusable=False ; Style={StaticResource SubtleButton} ; ToolTip=連続コピー＆ペーストを終了し、収集内容を破棄します
+          - **StackPanel** — VerticalAlignment=Center
+            - **TextBlock** — Text={Binding Title} ; FontWeight=SemiBold
+            - **TextBlock** — Text={Binding Status} ; FontSize=20 ; FontWeight=SemiBold ; Margin=0,4,0,0 ; Foreground={DynamicResource Brush.Accent}
+        - **ProgressBar** — Height=4 ; Minimum=0 ; Maximum={Binding TotalCount} ; Value={Binding PastedCount, Mode=OneWay} ; Margin=0,0,0,12 ; Foreground={DynamicResource Brush.Accent} ; Background={DynamicResource Brush.Surface.Alt}
+          - **ProgressBar.Style**
+            - **Style** — TargetType=ProgressBar
+              - **Setter** — Property=Visibility ; Value=Visible
+              - **Style.Triggers**
+                - **DataTrigger** — Binding={Binding IsCapturing} ; Value=True
+                  - **Setter** — Property=Visibility ; Value=Collapsed
+        - **Border** — Padding=10 ; CornerRadius=6 ; Background={DynamicResource Brush.Surface.Alt}
+          - **StackPanel**
+            - **TextBlock** — Text={Binding PreviewLabel} ; FontSize=11 ; Foreground={DynamicResource Brush.Text.Secondary}
+            - **TextBlock** — Text={Binding Preview} ; Margin=0,5,0,0 ; TextWrapping=Wrap ; MaxHeight=60 ; TextTrimming=CharacterEllipsis
+        - **TextBlock** — Text={Binding Hint} ; Margin=0,10,0,10 ; TextWrapping=Wrap ; Foreground={DynamicResource Brush.Text.Secondary} ; FontSize=11.5
+        - **Grid** — Visibility={Binding IsCapturing, Converter={StaticResource ProgressBoolToVis}}
+          - **Grid.ColumnDefinitions**
+            - **ColumnDefinition** — Width=*
+            - **ColumnDefinition** — Width=Auto
+          - **Button** — Content=最後のコピーを取り消す ; IsEnabled={Binding CanEdit} ; Click=OnUndo ; Padding=8,5 ; Margin=0,0,8,0
+          - **Button** — Grid.Column=1 ; Content=貼り付けへ → ; IsEnabled={Binding CanEdit} ; Click=OnBeginPasting ; Style={StaticResource AccentButton} ; Focusable=False
+        - **Expander** — x:Name=Details ; Header=収集した内容を確認 ; Margin=0,12,0,0 ; Focusable=False ; Foreground={DynamicResource Brush.Text}
+          - **Expander.Resources**
+            - **Style** — TargetType=ToggleButton
+              - **Setter** — Property=Focusable ; Value=False
+          - **StackPanel** — Margin=0,8,0,0
+            - **TextBlock** — Text=貼り付け開始前は、順番の変更・削除ができます。 ; TextWrapping=Wrap ; FontSize=11 ; Margin=0,0,0,6 ; Foreground={DynamicResource Brush.Text.Secondary} ; Visibility={Binding IsCapturing, Converter={StaticResource ProgressBoolToVis}}
+            - **ScrollViewer** — MaxHeight=220 ; VerticalScrollBarVisibility=Auto ; Focusable=False
+              - **ItemsControl** — ItemsSource={Binding Items} ; Focusable=False
+                - **ItemsControl.ItemTemplate**
+                  - **DataTemplate**
+                    - **Border** — Padding=5,6 ; Margin=0,1 ; CornerRadius=4
+                      - **Border.Style**
+                        - **Style** — TargetType=Border
+                          - **Setter** — Property=Background ; Value=Transparent
+                          - **Style.Triggers**
+                            - **DataTrigger** — Binding={Binding IsNext} ; Value=True
+                              - **Setter** — Property=Background ; Value={DynamicResource Brush.Selected}
+                      - **Grid**
+                        - **Grid.ColumnDefinitions**
+                          - **ColumnDefinition** — Width=32
+                          - **ColumnDefinition** — Width=*
+                          - **ColumnDefinition** — Width=Auto
+                        - **TextBlock** — Text={Binding Number} ; VerticalAlignment=Center ; Foreground={DynamicResource Brush.Text.Secondary}
+                        - **TextBlock** — Grid.Column=1 ; Text={Binding Preview} ; TextTrimming=CharacterEllipsis ; VerticalAlignment=Center ; Margin=0,0,4,0
+                          - **TextBlock.ToolTip**
+                            - **ToolTip** — MaxWidth=360
+                              - **TextBlock** — Text={Binding Preview} ; TextWrapping=Wrap
+                        - **StackPanel** — Grid.Column=2 ; Orientation=Horizontal ; Visibility={Binding CanRemove, Converter={StaticResource ProgressBoolToVis}}
+                          - **Button** — Content=↑ ; Tag={Binding Id} ; Click=OnMoveUp ; IsEnabled={Binding CanMoveUp} ; Padding=6,2 ; MinHeight=24 ; ToolTip=1 つ上へ ; AutomationProperties.Name=1 つ上へ
+                          - **Button** — Content=↓ ; Tag={Binding Id} ; Click=OnMoveDown ; IsEnabled={Binding CanMoveDown} ; Padding=6,2 ; MinHeight=24 ; Margin=3,0 ; ToolTip=1 つ下へ ; AutomationProperties.Name=1 つ下へ
+                          - **Button** — Content=× ; Tag={Binding Id} ; Click=OnRemove ; Padding=6,2 ; MinHeight=24 ; ToolTip=このコピーを削除 ; AutomationProperties.Name=このコピーを削除

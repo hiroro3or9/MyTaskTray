@@ -1,0 +1,85 @@
+# 設定画面: 項目編集  配置先はui-settings.mdの右ペインGrid。以下をその子として配置する。親子構造はインデント、単位DIP。今回の段階で対象の領域だけ読む。 
+- **ScrollViewer** — VerticalScrollBarVisibility=Auto ; HorizontalScrollBarVisibility=Disabled ; Visibility={Binding IsItemEditable, Converter={StaticResource BoolToVis}}
+  - **Grid** — Margin=16
+    - **Grid.RowDefinitions**
+      - **RowDefinition** — Height=Auto
+      - **RowDefinition** — Height=Auto
+      - **RowDefinition** — Height=Auto
+      - **RowDefinition** — Height=Auto
+      - **RowDefinition** — Height=Auto
+      - **RowDefinition** — Height=* ; MinHeight=100
+      - **RowDefinition** — Height=Auto
+      - **RowDefinition** — Height=Auto
+    - **TextBlock** — Grid.Row=0 ; Text=項目の内容 ; Style={StaticResource SectionTitle} ; Margin=0,0,0,12
+    - **StackPanel** — Grid.Row=1 ; Margin=0,0,0,12
+      - **TextBlock** — Text=メニューに表示する名前 ; Style={StaticResource FieldLabel}
+      - **TextBox** — x:Name=NameBox ; Text={Binding SelectedItem.Name, UpdateSourceTrigger=PropertyChanged}
+    - **StackPanel** — Grid.Row=2 ; Margin=0,0,0,12
+      - **TextBlock** — Style={StaticResource FieldLabel} ; Text=配置先（空欄ならトップレベル。入力した名前のサブメニューに入ります）
+      - **Grid**
+        - **Grid.ColumnDefinitions**
+          - **ColumnDefinition** — Width=*
+          - **ColumnDefinition** — Width=Auto
+        - **TextBox** — x:Name=CategoryBox ; Grid.Column=0 ; Text={Binding SelectedItem.Category, UpdateSourceTrigger=PropertyChanged}
+        - **Button** — x:Name=CategoryPickButton ; Grid.Column=1 ; Content=▾ ; Margin=5,0,0,0 ; Style={StaticResource IconButton} ; ToolTip=配置先を選ぶ ; Click=OnOpenCategoryPopup
+    - **StackPanel** — Grid.Row=3
+      - **Expander** — x:Name=TextExpansionExpander ; Header=文字入力で自動展開 ; Margin=0,0,0,10 ; Foreground={DynamicResource Brush.Text}
+        - **StackPanel** — Margin=10,6,10,0
+          - **TextBlock** — Text=呼び出し文字列（空欄で無効） ; Style={StaticResource FieldLabel}
+          - **TextBox** — x:Name=ExpansionTriggerBox ; MaxLength=32 ; Text={Binding SelectedItem.ExpansionTrigger, UpdateSourceTrigger=PropertyChanged}
+          - **TextBlock** — Style={StaticResource Hint} ; TextWrapping=Wrap ; Margin=0,5,0,0 ; Text=例: ;sig　IME オフで打ち終えると本文に置き換えます。大文字・小文字を区別します。通常のテキスト項目で使用でき、展開後の本文はクリップボードにも残ります。
+      - **Expander** — x:Name=SmartActionExpander ; Margin=0,0,0,10 ; Foreground={DynamicResource Brush.Text} ; Header=スマートアクション（クリップボードに応じて表示）
+        - **Border** — Margin=0,6,0,0 ; Padding=10,9 ; CornerRadius=6 ; Background={DynamicResource Brush.Surface.Alt} ; BorderBrush={DynamicResource Brush.Border} ; BorderThickness=1 ; TextElement.Foreground={DynamicResource Brush.Text}
+          - **StackPanel**
+            - **Grid**
+              - **Grid.ColumnDefinitions**
+                - **ColumnDefinition** — Width=Auto
+                - **ColumnDefinition** — Width=180
+                - **ColumnDefinition** — Width=*
+              - **TextBlock** — Grid.Column=0 ; Text=表示条件 ; Margin=0,0,10,0 ; VerticalAlignment=Center
+              - **ComboBox** — Grid.Column=1 ; ItemsSource={Binding ClipboardMatchOptions} ; DisplayMemberPath=Name ; SelectedValuePath=Kind ; SelectedValue={Binding SelectedItem.ClipboardCondition, Mode=TwoWay}
+            - **StackPanel** — Margin=0,8,0,0 ; Visibility={Binding SelectedItem.IsRegexCondition, Converter={StaticResource BoolToVis}}
+              - **TextBlock** — Text=正規表現 ; Style={StaticResource FieldLabel}
+              - **TextBox** — x:Name=ClipboardPatternBox ; FontFamily=Consolas, Yu Gothic UI ; Text={Binding SelectedItem.ClipboardPattern, UpdateSourceTrigger=PropertyChanged} ; ToolTip=名前付きキャプチャは {match:名前} でコピー文字列に差し込めます
+            - **CheckBox** — Margin=0,10,0,0 ; Content=複数行にも適用する（各行を 1 件として、行の数だけコピーする） ; IsChecked={Binding SelectedItem.ApplyToEachLine, Mode=TwoWay} ; Visibility={Binding SelectedItem.CanApplyToEachLine, Converter={StaticResource BoolToVis}} ; ToolTip=20 行をコピーしてこの項目を選ぶと、20 行ぶんの結果が改行でつながってコピーされます。条件に合わない行（見出し行や空行）は飛ばします
+            - **TextBlock** — Margin=0,7,0,0 ; TextWrapping=Wrap ; FontSize=11 ; Foreground={DynamicResource Brush.Text.Secondary} ; Text={Binding ClipboardConditionStatus}
+      - **Expander** — x:Name=AppContextExpander ; Margin=0,0,0,10 ; Foreground={DynamicResource Brush.Text} ; Header=表示するアプリ（前面のウィンドウに応じて表示）
+        - **Border** — Margin=0,6,0,0 ; Padding=10,9 ; CornerRadius=6 ; Background={DynamicResource Brush.Surface.Alt} ; BorderBrush={DynamicResource Brush.Border} ; BorderThickness=1 ; TextElement.Foreground={DynamicResource Brush.Text}
+          - **StackPanel**
+            - **TextBlock** — Style={StaticResource FieldLabel} ; Text=アプリ（実行ファイル名。カンマ区切りで複数指定できます）
+            - **Grid**
+              - **Grid.ColumnDefinitions**
+                - **ColumnDefinition** — Width=*
+                - **ColumnDefinition** — Width=Auto
+              - **TextBox** — x:Name=AppProcessBox ; Grid.Column=0 ; FontFamily=Consolas, Yu Gothic UI ; Text={Binding SelectedItem.AppProcess, UpdateSourceTrigger=PropertyChanged} ; ToolTip=例: chrome.exe, msedge.exe（.exe は省略できます）
+              - **Button** — x:Name=AppPickButton ; Grid.Column=1 ; Content=▾ ; Margin=5,0,0,0 ; Style={StaticResource IconButton} ; IsEnabled={Binding HasKnownApps} ; ToolTip=直近に前面だったアプリから選ぶ ; Click=OnOpenAppPopup
+            - **TextBlock** — Margin=0,8,0,0 ; Style={StaticResource FieldLabel} ; Text=ウィンドウタイトル（正規表現。空欄ならタイトルを見ません）
+            - **TextBox** — x:Name=AppTitleBox ; FontFamily=Consolas, Yu Gothic UI ; Text={Binding SelectedItem.AppTitlePattern, UpdateSourceTrigger=PropertyChanged} ; ToolTip=例: /issues/ （タイトルは言語やバージョンで変わることがあります）
+            - **TextBlock** — Margin=0,7,0,0 ; TextWrapping=Wrap ; FontSize=11 ; Foreground={DynamicResource Brush.Text.Secondary} ; Text={Binding AppConditionStatus}
+    - **Grid** — Grid.Row=4 ; Margin=0,0,0,4
+      - **Grid.RowDefinitions**
+        - **RowDefinition** — Height=Auto
+        - **RowDefinition** — Height=Auto
+      - **TextBlock** — Grid.Row=0 ; Text=クリップボードにコピーする文字列 ; VerticalAlignment=Center ; Style={StaticResource FieldLabel} ; Margin=0
+      - **StackPanel** — Grid.Row=0 ; Orientation=Horizontal ; HorizontalAlignment=Right
+        - **TextBlock** — Text=形式 ; VerticalAlignment=Center ; Margin=0,0,6,0 ; Foreground={DynamicResource Brush.Text.Secondary}
+        - **ComboBox** — x:Name=FormatBox ; Width=120 ; VerticalAlignment=Center ; ItemsSource={Binding ClipFormatOptions} ; DisplayMemberPath=Name ; SelectedValuePath=Format ; SelectedValue={Binding SelectedItem.Format, Mode=TwoWay} ; ToolTip=貼り付け先によって、この形式に応じた見え方になります
+        - **Button** — x:Name=InsertButton ; Content=差し込みを挿入 ▾ ; Margin=8,0,0,0 ; Padding=10,3 ; MinHeight=26 ; Click=OnOpenInsertPopup ; ToolTip={}{date} などの差し込みをカーソル位置に挿入します
+      - **TextBlock** — Grid.Row=1 ; Margin=0,5,0,0 ; TextWrapping=Wrap ; FontSize=11 ; Foreground={DynamicResource Brush.Text.Secondary} ; Text={Binding ClipFormatStatus}
+    - **TextBox** — Grid.Row=5 ; x:Name=TextBox_Content ; AcceptsReturn=True ; AcceptsTab=False ; TextWrapping=Wrap ; VerticalScrollBarVisibility=Auto ; VerticalContentAlignment=Top ; FontFamily=Consolas, Yu Gothic UI ; MaxHeight=300 ; Text={Binding SelectedItem.Text, UpdateSourceTrigger=PropertyChanged}
+    - **Border** — Grid.Row=6 ; Margin=0,12,0,0 ; Padding=12,10 ; CornerRadius=6 ; Background={DynamicResource Brush.Seq.Bg} ; BorderBrush={DynamicResource Brush.Seq.Border} ; BorderThickness=1 ; Visibility={Binding IsSequenceVisible, Converter={StaticResource BoolToVis}}
+      - **StackPanel**
+        - **TextBlock** — Text=連番の設定 ; FontWeight=SemiBold ; Margin=0,0,0,8 ; Foreground={DynamicResource Brush.Seq.Text}
+        - **StackPanel** — Orientation=Horizontal
+          - **TextBlock** — Text=次の番号 ; VerticalAlignment=Center ; Foreground={DynamicResource Brush.Seq.Text}
+          - **TextBox** — Width=80 ; Margin=8,0,18,0 ; PreviewTextInput=OnIntegerTextInput ; DataObject.Pasting=OnIntegerPasting ; LostFocus=OnIntegerLostFocus ; Text={Binding SelectedItem.SequenceValue, UpdateSourceTrigger=PropertyChanged}
+          - **TextBlock** — Text=増分 ; VerticalAlignment=Center ; Foreground={DynamicResource Brush.Seq.Text}
+          - **TextBox** — Width=64 ; Margin=8,0,18,0 ; ToolTip=負の値を入れるとカウントダウンになります ; PreviewTextInput=OnIntegerTextInput ; DataObject.Pasting=OnIntegerPasting ; LostFocus=OnIntegerLostFocus ; Text={Binding SelectedItem.SequenceStep, UpdateSourceTrigger=PropertyChanged}
+          - **Button** — Content=1 に戻す ; Padding=10,3 ; MinHeight=26 ; Click=OnResetSequence
+        - **TextBlock** — Margin=0,8,0,0 ; TextWrapping=Wrap ; FontSize=11 ; Foreground={DynamicResource Brush.Seq.Text} ; Text=コピーするたびに番号が増分だけ進み、設定ファイルに保存されます。
+    - **StackPanel** — Grid.Row=7 ; Margin=0,12,0,0
+      - **TextBlock** — Margin=0,0,0,8 ; TextWrapping=Wrap ; FontSize=11 ; Foreground={DynamicResource Brush.Text.Secondary} ; Visibility={Binding IsChoiceVisible, Converter={StaticResource BoolToVis}} ; Text={Binding ChoiceStatus}
+      - **Grid** — Margin=0,0,0,4
+        - **TextBlock** — Text=プレビュー（実際にコピーされる文字列） ; VerticalAlignment=Center ; Style={StaticResource FieldLabel} ; Margin=0
+        - **Button** — Content=コピーして試す ; HorizontalAlignment=Right ; Padding=10,3 ; MinHeight=26 ; Style={StaticResource SubtleButton} ; Click=OnCopyPreview ; ToolTip=プレビューの内容をクリップボードにコピーします（連番は進みません）
+      - **TextBox** — x:Name=PreviewBox ; Height=68 ; IsReadOnly=True ; TextWrapping=Wrap ; VerticalScrollBarVisibility=Auto ; Foreground={DynamicResource Brush.Preview.Text} ; Text={Binding Preview, Mode=OneWay}

@@ -1,0 +1,47 @@
+# 設定画面: カテゴリ編集  配置先はui-settings.mdの右ペインGrid。以下をその子として配置する。親子構造はインデント、単位DIP。今回の段階で対象の領域だけ読む。 
+- **Grid** — Margin=16 ; Visibility={Binding IsCategoryEditable, Converter={StaticResource BoolToVis}}
+  - **Grid.RowDefinitions**
+    - **RowDefinition** — Height=Auto
+    - **RowDefinition** — Height=Auto
+    - **RowDefinition** — Height=Auto
+    - **RowDefinition** — Height=Auto
+    - **RowDefinition** — Height=Auto
+    - **RowDefinition** — Height=*
+  - **TextBlock** — Grid.Row=0 ; Text=カテゴリの設定 ; Style={StaticResource SectionTitle} ; Margin=0,0,0,12
+  - **StackPanel** — Grid.Row=1
+    - **TextBlock** — Text=カテゴリ名 ; Style={StaticResource FieldLabel}
+    - **Grid**
+      - **Grid.ColumnDefinitions**
+        - **ColumnDefinition** — Width=*
+        - **ColumnDefinition** — Width=Auto
+      - **TextBox** — x:Name=CategoryNameBox ; Grid.Column=0 ; Text={Binding CategoryNameDraft, UpdateSourceTrigger=PropertyChanged} ; KeyDown=OnCategoryNameKeyDown
+      - **Button** — Grid.Column=1 ; Content=名前を変更 ; Margin=8,0,0,0 ; Padding=12,4 ; Click=OnRenameCategory
+  - **StackPanel** — Grid.Row=2 ; Margin=0,14,0,0
+    - **Grid**
+      - **TextBlock** — Text=色 ; Style={StaticResource FieldLabel}
+      - **Button** — HorizontalAlignment=Right ; Content=装飾をリセット ; Padding=8,2 ; MinHeight=24 ; Style={StaticResource SubtleButton} ; IsEnabled={Binding HasSelectedCategoryAppearance} ; Click=OnResetCategoryAppearance
+    - **ListBox** — Style={StaticResource CategoryPalette} ; ItemContainerStyle={StaticResource CategoryPaletteItem} ; ItemsSource={Binding CategoryColorOptions} ; SelectedValuePath=Value ; SelectedValue={Binding SelectedCategoryColor, Mode=TwoWay}
+      - **ListBox.ItemTemplate**
+        - **DataTemplate**
+          - **Grid** — Width=30 ; Height=30 ; ToolTip={Binding Name}
+            - **Ellipse** — Width=16 ; Height=16 ; Fill={Binding Brush} ; Stroke={DynamicResource Brush.Border.Strong} ; StrokeThickness=1
+            - **TextBlock** — Text=— ; Foreground={DynamicResource Brush.Text} ; HorizontalAlignment=Center ; VerticalAlignment=Center ; FontSize=13
+              - **TextBlock.Style**
+                - **Style** — TargetType=TextBlock
+                  - **Setter** — Property=Visibility ; Value=Collapsed
+                  - **Style.Triggers**
+                    - **DataTrigger** — Binding={Binding HasValue} ; Value=False
+                      - **Setter** — Property=Visibility ; Value=Visible
+    - **TextBlock** — Text=アイコン ; Margin=0,4,0,0 ; Style={StaticResource FieldLabel}
+    - **ListBox** — Style={StaticResource CategoryPalette} ; ItemContainerStyle={StaticResource CategoryPaletteItem} ; ItemsSource={Binding CategoryIconOptions} ; SelectedValuePath=Value ; SelectedValue={Binding SelectedCategoryIcon, Mode=TwoWay}
+      - **ListBox.ItemTemplate**
+        - **DataTemplate**
+          - **Grid** — Width=30 ; Height=30 ; ToolTip={Binding Name}
+            - **TextBlock** — Text={Binding Glyph} ; FontFamily={Binding FontFamily} ; Foreground={DynamicResource Brush.Text} ; FontSize=15 ; HorizontalAlignment=Center ; VerticalAlignment=Center
+  - **Border** — Grid.Row=3 ; Margin=0,9,0,0 ; Padding=12,10 ; CornerRadius=6 ; Background={DynamicResource Brush.Surface.Alt} ; BorderBrush={DynamicResource Brush.Border} ; BorderThickness=1
+    - **StackPanel**
+      - **TextBlock**
+        - **Run** — Text={Binding SelectedCategoryItemCount, Mode=OneWay}
+        - **Run** — Text= 件の項目がこのカテゴリに属しています。
+      - **TextBlock** — Text={Binding SelectedCategoryLocation} ; Margin=0,4,0,0 ; Style={StaticResource Hint} ; TextWrapping=Wrap
+  - **Button** — Grid.Row=4 ; Content=カテゴリを削除… ; HorizontalAlignment=Left ; Margin=0,14,0,0 ; Padding=12,4 ; Click=OnRemoveCategory ; ToolTip=中の項目は削除せず、トップレベルへ移します
